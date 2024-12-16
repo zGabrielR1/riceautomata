@@ -190,4 +190,4 @@ Contributions are welcome! If you have suggestions, bug reports, or would like t
 
 ## License
 
-This project is licensed under the [Your License Here].
+This project is licensed under the Apache License, Version 2.0.
