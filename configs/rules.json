@@ -1,0 +1,13 @@
+{
+    "rules":[
+      {
+        "name": "scripts"
+      },
+      {
+        "regex": "^(wallpaper|wallpapers|backgrounds)$"
+      },
+      {
+        "regex": "^(icons|cursors)$"
+      }
+    ]
+  }

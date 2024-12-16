@@ -1,0 +1,9 @@
+{
+    "nvim": "neovim",
+    "hypr": "hyprland",
+    "waybar": "waybar",
+    "zsh": "zsh",
+    "alacritty": "alacritty",
+    "dunst": "dunst",
+    "gtk-3.0": "gtk3"
+  }
