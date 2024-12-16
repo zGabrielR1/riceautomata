@@ -1,3 +1,100 @@
+# src/config.py
+import json
+import os
+from src.utils import sanitize_path, setup_logger
+
+logger = setup_logger()
+DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
+DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
+
+class ConfigManager:
+
+    def __init__(self, config_dir=DEFAULT_CONFIG_DIR, config_file=DEFAULT_CONFIG_FILE):
+        self.config_dir = sanitize_path(config_dir)
+        self.config_file = sanitize_path(config_file)
+        self.config_data = {}
+        self._ensure_config_dir()
+        self._load_config()
+
+    def _ensure_config_dir(self):
+        """Creates the config directory if it doesn't exist."""
+        if not os.path.exists(self.config_dir):
+            os.makedirs(self.config_dir, exist_ok=True)
+
+    def _load_config(self):
+        """Loads the configuration data from the JSON file."""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    self.config_data = json.load(f)
+            else:
+                self.config_data = {
+                    'package_managers': {
+                        'preferred': None,  # User's preferred package manager
+                        'installed': [],    # List of installed package managers
+                        'auto_install': False  # Whether to auto-install package managers
+                    },
+                    'rices': {}  # Rice configurations
+                }
+                self._save_config()
+            logger.debug(f"Configuration loaded from: {self.config_file}")
+
+        except FileNotFoundError:
+            logger.debug(f"Config file not found: {self.config_file}. Creating a new one.")
+            self.config_data = {}
+            self._save_config()
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from {self.config_file}. Check if it's valid JSON")
+            self.config_data = {}
+            self._save_config()
+        except Exception as e:
+            logger.error(f"Error loading configuration file: {e}")
+
+    def _save_config(self):
+        """Saves the configuration data to the JSON file."""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config_data, f, indent=4)
+                logger.debug(f"Config saved to {self.config_file}")
+        except Exception as e:
+            logger.error(f"Error saving configuration file: {e}")
+
+    def get_rice_config(self, repository_name):
+        """Gets configuration data for a given repository."""
+        return self.config_data.get('rices', {}).get(repository_name)
+
+    def add_rice_config(self, repository_name, config):
+        """Adds or updates configuration data for a repository."""
+        if 'rices' not in self.config_data:
+            self.config_data['rices'] = {}
+        self.config_data['rices'][repository_name] = config
+        self._save_config()
+
+    def get_package_manager_config(self):
+        """Gets the package manager configuration."""
+        if 'package_managers' not in self.config_data:
+            self.config_data['package_managers'] = {
+                'preferred': None,
+                'installed': [],
+                'auto_install': False
+            }
+            self._save_config()
+        return self.config_data['package_managers']
+
+    def set_package_manager_config(self, preferred=None, installed=None, auto_install=None):
+        """Updates the package manager configuration."""
+        if 'package_managers' not in self.config_data:
+            self.config_data['package_managers'] = {}
+        
+        if preferred is not None:
+            self.config_data['package_managers']['preferred'] = preferred
+        if installed is not None:
+            self.config_data['package_managers']['installed'] = installed
+        if auto_install is not None:
+            self.config_data['package_managers']['auto_install'] = auto_install
+        
+        self._save_config()
+# src/dotfile.py
 import os
 import shutil
 import subprocess
@@ -17,6 +114,7 @@ class DotfileManager:
         self.managed_rices_dir = sanitize_path("~/.config/managed-rices")
         self._ensure_managed_dir()
         self.rules_config = self._load_rules()
+        self.dependency_map = self._load_dependency_map()
         self.nix_installed = False
 
     def _ensure_managed_dir(self):
@@ -37,6 +135,19 @@ class DotfileManager:
           self.logger.error(f"Could not load rules config: {e}")
           return {}
 
+    def _load_dependency_map(self):
+      """Loads the dependency map to discover dependencies"""
+      dependency_map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "dependency_map.json")
+      try:
+        if os.path.exists(dependency_map_path):
+           with open(dependency_map_path, 'r') as f:
+              return json.load(f)
+        else:
+          return {}
+      except Exception as e:
+           self.logger.error(f"Could not load dependency map config: {e}")
+           return {}
+    
     def _run_command(self, command, check = True):
       """Runs a command and returns the result."""
       try:
@@ -111,14 +222,14 @@ class DotfileManager:
         de_wm_names = [
             "nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", 
             "gtk-3.0", "fish", "kitty", "i3", "bspwm", "awesome", "polybar", "picom",
-            "qtile", "xmonad", "openbox", "dwm", "eww", "wezterm", "foot"
+            "qtile", "xmonad", "openbox", "dwm", "eww", "wezterm", "foot", "ags"
         ]
         if dir_name in de_wm_names:
             score += 2
 
         # Check for common dotfile extensions
         dotfile_extensions = [".conf", ".toml", ".yaml", ".yml", ".json", ".config", 
-                            ".sh", ".bash", ".zsh", ".fish", ".lua", ".vim", ".el"]
+                            ".sh", ".bash", ".zsh", ".fish", ".lua", ".vim", ".el", ".ini", ".ron", ".scss", ".js", ".xml"]
         for item in os.listdir(dir_path):
             if os.path.isfile(os.path.join(dir_path, item)):
                 if any(item.endswith(ext) for ext in dotfile_extensions):
@@ -128,7 +239,7 @@ class DotfileManager:
         config_keywords = [
             "nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", 
             "sway", "gtk", "fish", "kitty", "config", "theme", "colorscheme",
-            "keybind", "workspace", "window", "border", "font", "opacity"
+            "keybind", "workspace", "window", "border", "font", "opacity", "ags"
         ]
         
         for item in os.listdir(dir_path):
@@ -151,7 +262,7 @@ class DotfileManager:
 
         if dir_name == "wallpapers" or dir_name == "wallpaper" or dir_name == "backgrounds":
            return "wallpaper"
-        elif dir_name == "scripts":
+        elif dir_name == "scripts" or dir_name == "bin":
           return "script"
         elif dir_name == "icons" or dir_name == "cursors":
             return "icon"
@@ -262,13 +373,21 @@ class DotfileManager:
             'picom': ['picom'],
             'qtile': ['qtile'],
             'xmonad': ['xmonad'],
-            'eww': ['eww-wayland']
+            'eww': ['eww-wayland'],
+            'ags': ['npm:yarn', 'npm:esbuild', 'npm:sass', 'gtk4'],
+            'foot': ['foot'],
+            'fuzzel': ['fuzzel']
         }
 
         for dir_name in dotfile_dirs:
             base_name = os.path.basename(dir_name)
             if base_name in common_deps:
                 dependencies.extend(f"auto:{dep}" for dep in common_deps[base_name])
+        #Check dependency map
+        for dep, packages in self.dependency_map.get('dependencies', {}).items():
+            if dep in dotfile_dirs or any(dep in dir for dir in dotfile_dirs):
+                dependencies.extend(packages)
+
 
         # Check arch-packages directory
         arch_packages_dir = os.path.join(local_dir, "arch-packages")
@@ -276,7 +395,19 @@ class DotfileManager:
             for item in os.listdir(arch_packages_dir):
                 item_path = os.path.join(arch_packages_dir, item)
                 if os.path.isdir(item_path):
-                    dependencies.append(f"pacman:{item}")
+                    dependencies.append(f"aur:{item}")
+
+        # Check for custom dependency files
+        custom_deps_file = os.path.join(local_dir, "scriptdata", "dependencies.conf")
+        if os.path.exists(custom_deps_file) and os.path.isfile(custom_deps_file):
+           try:
+              with open(custom_deps_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                       dependencies.append(line)
+           except Exception as e:
+               self.logger.error(f"Error reading custom dependency file {custom_deps_file}: {e}")
 
         return list(set(dependencies))  # Remove duplicates
 
@@ -368,6 +499,33 @@ class DotfileManager:
           self.logger.error(f"Error copying directory {dir_path} to {target_path}: {e}")
           return False
        return True
+    
+    def _apply_extra_directory(self, local_dir, directory):
+        """Applies files from the Extras directory"""
+        dir_path = os.path.join(local_dir, directory)
+        target_base = os.path.join("/") # Files from extras will be installed in this directory
+        target_path = os.path.join(target_base, os.path.basename(directory))
+
+        if not os.path.exists(target_base):
+          os.makedirs(target_base, exist_ok=True) #create root folder if it does not exists.
+
+        try:
+            if os.path.exists(target_path): # if a folder already exists, abort.
+                self.logger.warning(f"Path {target_path} already exists, skipping...")
+                return False
+            shutil.copytree(dir_path, target_path)
+            self.logger.info(f"Copied directory {dir_path} to {target_path}")
+        except NotADirectoryError:
+            try:
+                shutil.copy2(dir_path, target_path)
+                self.logger.info(f"Copied file {dir_path} to {target_path}")
+            except Exception as e:
+                self.logger.error(f"Error copying file {dir_path} to {target_path}: {e}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error copying directory {dir_path} to {target_path}: {e}")
+            return False
+        return True
 
     def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None):
         """Applies dotfiles from a repository using GNU Stow."""
@@ -429,9 +587,21 @@ class DotfileManager:
             elif category == "local":
                 if not self._apply_local_directory(local_dir, directory, stow_options):
                     applied_all = False
+            elif category == "script":
+                if not self._apply_other_directory(local_dir, directory): # Bin folders and other scripts
+                     applied_all = False
             else: # wallpaper, scripts, icons, etc.
                if not self._apply_other_directory(local_dir, directory):
                   applied_all = False
+
+        extras_dir = os.path.join(local_dir, "Extras")
+        if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
+            self.logger.info("Found Extras folder, applying the files now.")
+            for item in os.listdir(extras_dir):
+                item_path = os.path.join(extras_dir, item)
+                if os.path.isdir(item_path):
+                    if not self._apply_extra_directory(local_dir, item_path):
+                       applied_all = False
 
         if applied_all:
             self.logger.info(f"Successfully applied dotfiles from {repository_name}")
@@ -445,7 +615,7 @@ class DotfileManager:
     def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None):
          """Manages the dotfiles, uninstalling the previous rice, and applying the new one."""
          current_rice = None
-         for key, value in self.config_manager.config_data.items():
+         for key, value in self.config_manager.config_data.get('rices', {}).items():
             if value.get('applied', False):
               current_rice = key
               break
@@ -506,6 +676,28 @@ class DotfileManager:
                    self.logger.error(f"Error removing directory {target_path}: {e}")
             else:
               self.logger.warning(f"Could not find other directory: {target_path}. Skipping...")
+      
+      # Uninstall Extras
+      extras_dir = os.path.join(local_dir, "Extras")
+      if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
+          for item in os.listdir(extras_dir):
+            item_path = os.path.join(extras_dir, item)
+            target_path = os.path.join("/", item)
+            if os.path.exists(target_path):
+                try:
+                  shutil.rmtree(target_path)
+                  self.logger.debug(f"Removed extra directory: {target_path}")
+                except NotADirectoryError:
+                  try:
+                    os.remove(target_path)
+                    self.logger.debug(f"Removed extra file: {target_path}")
+                  except Exception as e:
+                    self.logger.error(f"Error removing file from Extras: {target_path}. Error: {e}")
+                except Exception as e:
+                   self.logger.error(f"Error removing extra directory: {target_path}. Error: {e}")
+            else:
+               self.logger.warning(f"Could not find extra directory: {target_path}. Skipping...")
+
       if unlinked_all:
             self.logger.info(f"Successfully uninstalled the dotfiles for: {repository_name}")
             rice_config['applied'] = False

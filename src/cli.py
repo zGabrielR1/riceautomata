@@ -38,11 +38,15 @@ def main():
   # Specify distro
   parser.add_argument("--distro", type=str, help="Specify the distribution to use")
 
+  # AUR Helper Selection
+  parser.add_argument("--aur-helper", type=str, default="paru", choices=["paru", "yay"], help="Specify the AUR helper to use")
+
+
   args = parser.parse_args()
 
   logger = setup_logger(args.verbose, os.path.expanduser("~/.config/riceautomator/riceautomator.log"))
 
-  package_manager = PackageManager(args.verbose)
+  package_manager = PackageManager(args.verbose, args.aur_helper)
 
   if args.distro:
       package_manager.set_package_manager(args.distro)
