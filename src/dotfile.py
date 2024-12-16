@@ -549,7 +549,12 @@ class DotfileManager:
         if target_packages:
           if not isinstance(target_packages, list):
             target_packages = [target_packages]
-          self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
+          
+          # Minor Change to correctly print rice name when target packages are defined.
+          if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
+            self.logger.info(f"Applying dots for: {target_packages[0]}") # Added the index [0] to show the right name of the rice.
+          else:
+            self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
         dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages)
         if not dotfile_dirs:
            self.logger.warning("No dotfile directories found. Aborting")
