@@ -320,14 +320,11 @@ class DotfileManager:
       def _is_font_file(filename):
         font_extensions = [".ttf", ".otf", ".woff", ".woff2"]
         return any(filename.lower().endswith(ext) for ext in font_extensions)
-      
-      """Checks if the directory contains font files."""
-      fonts_dir = os.path.join(local_dir, "fonts")
-      if os.path.exists(fonts_dir) and os.path.isdir(fonts_dir):
-        for item in os.listdir(fonts_dir):
-          item_path = os.path.join(fonts_dir, item)
-          if os.path.isfile(item_path) and _is_font_file(item):
-              return True
+      """Checks if the repository contains a NixOS configuration."""
+      nix_files = ["flake.nix", "configuration.nix"]
+      for file in nix_files:
+        if os.path.exists(os.path.join(local_dir, file)):
+          return True
       return False
 
     def _install_fonts(self, local_dir, package_manager):
@@ -434,6 +431,12 @@ class DotfileManager:
        """Applies a local directory using GNU Stow."""
        stow_command = ["stow", "-v"]
        stow_command.extend(stow_options)
+       stow_command.append(os.path.basename(directory))
+       stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
+       if not stow_result or stow_result.returncode != 0:
+          self.logger.error(f"Failed to stow local files: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
+          return False
+       return True
 
     def _apply_other_directory(self, local_dir, directory):
        """Applies files that aren't configs (wallpaper, scripts) into the home directory"""
@@ -484,7 +487,7 @@ class DotfileManager:
             return False
         return True
 
-    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None):
+    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None):
         """Applies dotfiles from a repository using GNU Stow."""
         rice_config = self.config_manager.get_rice_config(repository_name)
         if not rice_config:
@@ -546,13 +549,13 @@ class DotfileManager:
               self.logger.warning(f"Could not find directory: {dir_path}")
               continue
             if category == "config":
-              if not self._apply_config_directory(local_dir, directory, stow_options):
+              if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
                 applied_all = False
             elif category == "cache":
-                if not self._apply_cache_directory(local_dir, directory, stow_options):
+                if not self._apply_cache_directory(local_dir, directory, stow_options, overwrite_symlink):
                   applied_all = False
             elif category == "local":
-                if not self._apply_local_directory(local_dir, directory, stow_options):
+                if not self._apply_local_directory(local_dir, directory, stow_options, overwrite_symlink):
                     applied_all = False
             elif category == "script":
                 if not self._apply_other_directory(local_dir, directory): # Bin folders and other scripts
