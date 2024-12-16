@@ -74,7 +74,7 @@ class DotfileManager:
           config = {
             'repository_url': repository_url,
             'local_directory': local_dir,
-            'dotfile_directories': {},  # Changed to a dict
+            'dotfile_directories': {},  
             'config_backup_path': None,
             'dependencies': [],
             'applied': False,
@@ -92,39 +92,58 @@ class DotfileManager:
          return False
 
     def _is_likely_dotfile_dir(self, dir_path):
-      """Checks if the directory is likely to contain dotfiles based on its name, content, and rules."""
-      dir_name = os.path.basename(dir_path)
-      # First, check against the rules
-      for rule in self.rules_config.get('rules', []):
-        if rule.get('regex'):
-            try:
-                if re.search(rule['regex'], dir_name):
-                  return True
-            except Exception as e:
-               self.logger.error(f"Error with rule regex: {rule['regex']}. Check your rules.json file. Error: {e}")
-        elif dir_name == rule.get('name'):
-            return True
-      # Check by the name (Common dotfile directories)
-      common_names = ["nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", "gtk-3.0", "fish", "kitty"]
-      if dir_name in common_names:
-        return True
+        """Checks if the directory is likely to contain dotfiles based on its name, content, and rules."""
+        score = 0
+        dir_name = os.path.basename(dir_path)
+        
+        # Check against rules from rules.json
+        for rule in self.rules_config.get('rules', []):
+            if rule.get('regex'):
+                try:
+                    if re.search(rule['regex'], dir_name):
+                        score += 3  # Higher weight for custom rules
+                except Exception as e:
+                    self.logger.error(f"Error with rule regex: {rule['regex']}. Check your rules.json file. Error: {e}")
+            elif dir_name == rule.get('name'):
+                score += 3
 
-      # Check for common dotfile extensions
-      for item in os.listdir(dir_path):
-         if os.path.isfile(os.path.join(dir_path, item)):
-          if item.endswith((".conf", ".toml", ".yaml", ".json", ".config", ".sh", ".bash", ".zsh", ".fish")):
-            return True
+        # Common desktop environment/window manager configs
+        de_wm_names = [
+            "nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", 
+            "gtk-3.0", "fish", "kitty", "i3", "bspwm", "awesome", "polybar", "picom",
+            "qtile", "xmonad", "openbox", "dwm", "eww", "wezterm", "foot"
+        ]
+        if dir_name in de_wm_names:
+            score += 2
 
-      # Check for specific content
-      for item in os.listdir(dir_path):
-          if os.path.isfile(os.path.join(dir_path, item)):
-           with open(os.path.join(dir_path, item), 'r', errors='ignore') as file:
-             content = file.read(1024)
-             if any( keyword in content for keyword in ["nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", "sway", "gtk", "fish", "kitty"]):
-              return True
+        # Check for common dotfile extensions
+        dotfile_extensions = [".conf", ".toml", ".yaml", ".yml", ".json", ".config", 
+                            ".sh", ".bash", ".zsh", ".fish", ".lua", ".vim", ".el"]
+        for item in os.listdir(dir_path):
+            if os.path.isfile(os.path.join(dir_path, item)):
+                if any(item.endswith(ext) for ext in dotfile_extensions):
+                    score += 1
 
-      # if nothing is matched, don't consider a dotfile
-      return False
+        # Check for specific content and configuration patterns
+        config_keywords = [
+            "nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", 
+            "sway", "gtk", "fish", "kitty", "config", "theme", "colorscheme",
+            "keybind", "workspace", "window", "border", "font", "opacity"
+        ]
+        
+        for item in os.listdir(dir_path):
+            if os.path.isfile(os.path.join(dir_path, item)):
+                try:
+                    with open(os.path.join(dir_path, item), 'r', errors='ignore') as file:
+                        content = file.read(1024)  # Read first 1KB for performance
+                        for keyword in config_keywords:
+                            if keyword in content.lower():
+                                score += 0.5
+                except:
+                    pass  # Skip files that can't be read
+
+        # Return true if score meets threshold
+        return score >= 2  # Adjust threshold as needed
 
     def _categorize_dotfile_directory(self, dir_path):
         """Categorizes a dotfile directory as 'config', 'wallpaper', 'script', etc."""
@@ -145,7 +164,7 @@ class DotfileManager:
 
     def _discover_dotfile_directories(self, local_dir, target_packages = None):
         """Detects dotfile directories using the improved heuristics, and categorizes them."""
-        dotfile_dirs = {}  # Changed to a dictionary
+        dotfile_dirs = {}  
         for item in os.listdir(local_dir):
            item_path = os.path.join(local_dir, item)
            if os.path.isdir(item_path):
@@ -184,36 +203,83 @@ class DotfileManager:
         return dotfile_dirs
 
     def _discover_dependencies(self, local_dir, dotfile_dirs):
-       """Detects dependencies based on the dotfile directories, dependency files and arch-packages folder."""
-       dependency_map = self.config_manager.get_dependency_map()
-       dependencies = []
-       for directory, _ in dotfile_dirs.items():
-        dir_name = os.path.basename(directory)
-        if dir_name in dependency_map:
-            dependencies.append(dependency_map[dir_name])
-        else:
-          self.logger.debug(f"No dependency found on dependency map for {directory}. Make sure the folder matches the dependency file")
+        """Detects dependencies based on the dotfile directories, dependency files and package definitions."""
+        dependencies = []
+        package_managers = {
+            'pacman': ['pkglist.txt', 'packages.txt', 'arch-packages.txt'],
+            'apt': ['apt-packages.txt', 'debian-packages.txt'],
+            'dnf': ['fedora-packages.txt', 'rpm-packages.txt'],
+            'brew': ['brewfile', 'Brewfile'],
+            'pip': ['requirements.txt', 'python-packages.txt'],
+            'cargo': ['Cargo.toml'],
+            'npm': ['package.json']
+        }
 
-       #Check for custom dependency files, and add the dependencies from these files.
-       dependency_files = ["requirements.txt", "package.json", ".dependencies"]
-       for dep_file in dependency_files:
-        dep_file_path = os.path.join(local_dir, dep_file)
-        if os.path.exists(dep_file_path) and os.path.isfile(dep_file_path):
-            with open(dep_file_path, 'r') as f:
-              for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                  dependencies.append(line)
+        # Check for package manager specific dependency files
+        for pm, files in package_managers.items():
+            for file in files:
+                dep_file_path = os.path.join(local_dir, file)
+                if os.path.exists(dep_file_path) and os.path.isfile(dep_file_path):
+                    try:
+                        if file == 'package.json':
+                            with open(dep_file_path, 'r') as f:
+                                data = json.load(f)
+                                deps = data.get('dependencies', {})
+                                deps.update(data.get('devDependencies', {}))
+                                for pkg in deps.keys():
+                                    dependencies.append(f"npm:{pkg}")
+                        elif file == 'Cargo.toml':
+                            # Parse TOML file for Rust dependencies
+                            with open(dep_file_path, 'r') as f:
+                                for line in f:
+                                    if '=' in line and '[dependencies]' in open(dep_file_path).read():
+                                        pkg = line.split('=')[0].strip()
+                                        dependencies.append(f"cargo:{pkg}")
+                        else:
+                            with open(dep_file_path, 'r') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and not line.startswith('#'):
+                                        dependencies.append(f"{pm}:{line}")
+                    except Exception as e:
+                        self.logger.warning(f"Error parsing dependency file {file}: {e}")
 
-       # Check the "arch-packages" for additional dependencies.
-       arch_packages_dir = os.path.join(local_dir, "arch-packages")
-       if os.path.exists(arch_packages_dir) and os.path.isdir(arch_packages_dir):
-          for item in os.listdir(arch_packages_dir):
-            item_path = os.path.join(arch_packages_dir, item)
-            if os.path.isdir(item_path):
-              package_name = item
-              dependencies.append(package_name)
-       return dependencies
+        # Check common config directories for implicit dependencies
+        common_deps = {
+            'nvim': ['neovim'],
+            'zsh': ['zsh'],
+            'hypr': ['hyprland'],
+            'waybar': ['waybar'],
+            'alacritty': ['alacritty'],
+            'dunst': ['dunst'],
+            'rofi': ['rofi'],
+            'sway': ['sway'],
+            'fish': ['fish'],
+            'kitty': ['kitty'],
+            'i3': ['i3-wm'],
+            'bspwm': ['bspwm'],
+            'polybar': ['polybar'],
+            'picom': ['picom'],
+            'qtile': ['qtile'],
+            'xmonad': ['xmonad'],
+            'eww': ['eww-wayland']
+        }
+
+        for dir_name in dotfile_dirs:
+            base_name = os.path.basename(dir_name)
+            if base_name in common_deps:
+                dependencies.extend(f"auto:{dep}" for dep in common_deps[base_name])
+
+        # Check arch-packages directory
+        arch_packages_dir = os.path.join(local_dir, "arch-packages")
+        if os.path.exists(arch_packages_dir) and os.path.isdir(arch_packages_dir):
+            for item in os.listdir(arch_packages_dir):
+                item_path = os.path.join(arch_packages_dir, item)
+                if os.path.isdir(item_path):
+                    dependencies.append(f"pacman:{item}")
+
+        return list(set(dependencies))  # Remove duplicates
+
     def _check_nix_config(self, local_dir):
       """Checks if the repository contains a NixOS configuration."""
       nix_files = ["flake.nix", "configuration.nix"]

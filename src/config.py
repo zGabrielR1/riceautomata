@@ -5,19 +5,15 @@ from src.utils import sanitize_path, setup_logger
 logger = setup_logger()
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
 DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
-DEFAULT_DEPENDENCY_MAP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "dependency_map.json")
 
 class ConfigManager:
 
-    def __init__(self, config_dir=DEFAULT_CONFIG_DIR, config_file=DEFAULT_CONFIG_FILE, dependency_map=DEFAULT_DEPENDENCY_MAP):
+    def __init__(self, config_dir=DEFAULT_CONFIG_DIR, config_file=DEFAULT_CONFIG_FILE):
         self.config_dir = sanitize_path(config_dir)
         self.config_file = sanitize_path(config_file)
-        self.dependency_map = sanitize_path(dependency_map)
         self.config_data = {}
-        self.dependency_data = {}
         self._ensure_config_dir()
         self._load_config()
-        self._load_dependencies()
 
     def _ensure_config_dir(self):
         """Creates the config directory if it doesn't exist."""
@@ -31,8 +27,15 @@ class ConfigManager:
                 with open(self.config_file, 'r') as f:
                     self.config_data = json.load(f)
             else:
-              self.config_data = {}
-              self._save_config() # Creates the config file if it doesn't exist
+                self.config_data = {
+                    'package_managers': {
+                        'preferred': None,  # User's preferred package manager
+                        'installed': [],    # List of installed package managers
+                        'auto_install': False  # Whether to auto-install package managers
+                    },
+                    'rices': {}  # Rice configurations
+                }
+                self._save_config()
             logger.debug(f"Configuration loaded from: {self.config_file}")
 
         except FileNotFoundError:
@@ -46,24 +49,6 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error loading configuration file: {e}")
 
-    def _load_dependencies(self):
-      """Loads the dependency map from the JSON file."""
-      try:
-        if os.path.exists(self.dependency_map):
-            with open(self.dependency_map, 'r') as f:
-              self.dependency_data = json.load(f)
-            logger.debug(f"Dependencies loaded from: {self.dependency_map}")
-        else:
-          logger.error(f"Dependency map not found at {self.dependency_map}")
-          self.dependency_data = {} # Assign an empty dict to avoid errors if the file doesn't exists
-
-      except json.JSONDecodeError:
-        logger.error(f"Failed to decode JSON from {self.dependency_map}. Check if it's valid JSON")
-      except Exception as e:
-        logger.error(f"Error loading dependency file: {e}")
-        self.dependency_data = {}
-
-
     def _save_config(self):
         """Saves the configuration data to the JSON file."""
         try:
@@ -75,13 +60,36 @@ class ConfigManager:
 
     def get_rice_config(self, repository_name):
         """Gets configuration data for a given repository."""
-        return self.config_data.get(repository_name)
+        return self.config_data.get('rices', {}).get(repository_name)
 
     def add_rice_config(self, repository_name, config):
         """Adds or updates configuration data for a repository."""
-        self.config_data[repository_name] = config
+        if 'rices' not in self.config_data:
+            self.config_data['rices'] = {}
+        self.config_data['rices'][repository_name] = config
         self._save_config()
 
-    def get_dependency_map(self):
-        """Gets the dependency map"""
-        return self.dependency_data
+    def get_package_manager_config(self):
+        """Gets the package manager configuration."""
+        if 'package_managers' not in self.config_data:
+            self.config_data['package_managers'] = {
+                'preferred': None,
+                'installed': [],
+                'auto_install': False
+            }
+            self._save_config()
+        return self.config_data['package_managers']
+
+    def set_package_manager_config(self, preferred=None, installed=None, auto_install=None):
+        """Updates the package manager configuration."""
+        if 'package_managers' not in self.config_data:
+            self.config_data['package_managers'] = {}
+        
+        if preferred is not None:
+            self.config_data['package_managers']['preferred'] = preferred
+        if installed is not None:
+            self.config_data['package_managers']['installed'] = installed
+        if auto_install is not None:
+            self.config_data['package_managers']['auto_install'] = auto_install
+        
+        self._save_config()
