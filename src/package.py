@@ -13,6 +13,7 @@
           self.logger = setup_logger(verbose)
           self.nix_installed = self._check_nix()
           self.aur_helper = aur_helper
+          self.installed_packages = []
           self.package_managers = {
               'system': self.system_package_manager,
               'pip': self._check_pip(),
@@ -205,6 +206,20 @@
           except Exception as e:
               self.logger.error(f"Error installing nix: {e}")
               return False
+              
+      def _install_font_manually(self, font_path):
+          """Tries to install the font manually."""
+          try:
+            font_target_path = os.path.join(os.path.expanduser("~/.local/share/fonts"), os.path.basename(font_path))
+            if not os.path.exists(os.path.dirname(font_target_path)):
+              os.makedirs(os.path.dirname(font_target_path), exist_ok = True)
+            shutil.copy2(font_path, font_target_path)
+            self._run_command(["fc-cache", "-f", "-v"])
+            self.logger.info(f"Successfully installed font manually at: {font_target_path}")
+            return True
+          except Exception as e:
+            self.logger.error(f"Error installing font manually: {e}")
+            return False
 
       def install(self, packages, use_paru = True):
           """Installs the list of packages using the package manager, with user confirmation."""
@@ -270,7 +285,8 @@
         if self.nix_installed:
             nix_result = self._run_command(["nix", "profile", "list"], check=False)
             if nix_result and nix_result.returncode == 0:
-              if package in nix_result.stdout:
+              self.installed_packages = nix_result.stdout.split("\n")
+              if any(package in installed_package for installed_package in self.installed_packages):
                 if self.verbose:
                       self.logger.debug(f"Nix package {package} is installed")
                 return True
@@ -293,6 +309,9 @@
           elif self.system_package_manager == "zypper":
             query_command.extend(["rpm", "-q", package])
           result = self._run_command(query_command, check=False)
+          
+          if result and result.stdout:
+             self.installed_packages = result.stdout.split("\n")
 
           if result and result.returncode == 0:
               if self.verbose:

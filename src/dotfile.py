@@ -411,7 +411,44 @@ class DotfileManager:
 
         return list(set(dependencies))  # Remove duplicates
 
-    def _check_nix_config(self, local_dir):
+         def _check_nix_config(self, local_dir):
+      """Checks if a font file exists."""
+      def _is_font_file(filename):
+        font_extensions = [".ttf", ".otf", ".woff", ".woff2"]
+        return any(filename.lower().endswith(ext) for ext in font_extensions)
+      
+      """Checks if the directory contains font files."""
+      fonts_dir = os.path.join(local_dir, "fonts")
+      if os.path.exists(fonts_dir) and os.path.isdir(fonts_dir):
+        for item in os.listdir(fonts_dir):
+          item_path = os.path.join(fonts_dir, item)
+          if os.path.isfile(item_path) and _is_font_file(item):
+              return True
+      return False
+
+    def _install_fonts(self, local_dir, package_manager):
+      """Installs any font files it finds in a font folder."""
+      def _is_font_file(filename):
+        font_extensions = [".ttf", ".otf", ".woff", ".woff2"]
+        return any(filename.lower().endswith(ext) for ext in font_extensions)
+      
+      fonts_dir = os.path.join(local_dir, "fonts")
+      if not os.path.exists(fonts_dir) or not os.path.isdir(fonts_dir):
+         return True # No fonts directory, so no fonts to install.
+      for item in os.listdir(fonts_dir):
+        item_path = os.path.join(fonts_dir, item)
+        if os.path.isfile(item_path) and _is_font_file(item):
+          font_name = os.path.basename(item).split(".")[0]
+          if not package_manager.is_installed(font_name) or not any(font_name in package for package in package_manager.installed_packages):
+            self.logger.info(f"Installing font {font_name}")
+            if not package_manager.install_package(f"auto:{font_name}"): # Install using system package manager, if its a package
+             self.logger.info(f"{font_name} not found as package, trying to install manually.")
+             if not package_manager._install_font_manually(item_path): # If not, we'll try to install it manually
+               self.logger.error(f"Failed to install font: {font_name}")
+               return False
+          else:
+            self.logger.debug(f"Font: {font_name} is already installed")
+      return True
       """Checks if the repository contains a NixOS configuration."""
       nix_files = ["flake.nix", "configuration.nix"]
       for file in nix_files:
@@ -576,6 +613,11 @@ class DotfileManager:
         dependencies = self._discover_dependencies(local_dir, dotfile_dirs)
         rice_config['dependencies'] = dependencies
         self.config_manager.add_rice_config(repository_name, rice_config)
+        
+        # Install fonts before applying anything
+        if self._check_nix_config(local_dir) == False: # Do not install fonts if it's a nixos configuration.
+            if not self._install_fonts(local_dir, package_manager):
+               return False
 
         applied_all = True
         for directory, category in dotfile_dirs.items():
