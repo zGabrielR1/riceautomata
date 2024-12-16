@@ -1,0 +1,15 @@
+    
+    def _overwrite_symlinks(self, target_path, local_dir, directory):
+      """Overwrites symlinks when the user specifies a custom folder to install."""
+      dir_path = os.path.join(local_dir, directory)
+      if not os.path.exists(dir_path):
+        self.logger.warning(f"Could not find directory {dir_path} when trying to overwrite")
+        return False
+      
+      target_dir = os.path.join(target_path, os.path.basename(directory))
+      if os.path.exists(target_dir):
+        stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+        self._run_command(stow_command, check=False, cwd=local_dir)
+
+    def _apply_cache_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
+         """Applies a cache directory using GNU Stow."""

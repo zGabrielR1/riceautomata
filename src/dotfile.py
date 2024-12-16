@@ -1,99 +1,3 @@
-# src/config.py
-import json
-import os
-from src.utils import sanitize_path, setup_logger
-
-logger = setup_logger()
-DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
-DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
-
-class ConfigManager:
-
-    def __init__(self, config_dir=DEFAULT_CONFIG_DIR, config_file=DEFAULT_CONFIG_FILE):
-        self.config_dir = sanitize_path(config_dir)
-        self.config_file = sanitize_path(config_file)
-        self.config_data = {}
-        self._ensure_config_dir()
-        self._load_config()
-
-    def _ensure_config_dir(self):
-        """Creates the config directory if it doesn't exist."""
-        if not os.path.exists(self.config_dir):
-            os.makedirs(self.config_dir, exist_ok=True)
-
-    def _load_config(self):
-        """Loads the configuration data from the JSON file."""
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    self.config_data = json.load(f)
-            else:
-                self.config_data = {
-                    'package_managers': {
-                        'preferred': None,  # User's preferred package manager
-                        'installed': [],    # List of installed package managers
-                        'auto_install': False  # Whether to auto-install package managers
-                    },
-                    'rices': {}  # Rice configurations
-                }
-                self._save_config()
-            logger.debug(f"Configuration loaded from: {self.config_file}")
-
-        except FileNotFoundError:
-            logger.debug(f"Config file not found: {self.config_file}. Creating a new one.")
-            self.config_data = {}
-            self._save_config()
-        except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON from {self.config_file}. Check if it's valid JSON")
-            self.config_data = {}
-            self._save_config()
-        except Exception as e:
-            logger.error(f"Error loading configuration file: {e}")
-
-    def _save_config(self):
-        """Saves the configuration data to the JSON file."""
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump(self.config_data, f, indent=4)
-                logger.debug(f"Config saved to {self.config_file}")
-        except Exception as e:
-            logger.error(f"Error saving configuration file: {e}")
-
-    def get_rice_config(self, repository_name):
-        """Gets configuration data for a given repository."""
-        return self.config_data.get('rices', {}).get(repository_name)
-
-    def add_rice_config(self, repository_name, config):
-        """Adds or updates configuration data for a repository."""
-        if 'rices' not in self.config_data:
-            self.config_data['rices'] = {}
-        self.config_data['rices'][repository_name] = config
-        self._save_config()
-
-    def get_package_manager_config(self):
-        """Gets the package manager configuration."""
-        if 'package_managers' not in self.config_data:
-            self.config_data['package_managers'] = {
-                'preferred': None,
-                'installed': [],
-                'auto_install': False
-            }
-            self._save_config()
-        return self.config_data['package_managers']
-
-    def set_package_manager_config(self, preferred=None, installed=None, auto_install=None):
-        """Updates the package manager configuration."""
-        if 'package_managers' not in self.config_data:
-            self.config_data['package_managers'] = {}
-        
-        if preferred is not None:
-            self.config_data['package_managers']['preferred'] = preferred
-        if installed is not None:
-            self.config_data['package_managers']['installed'] = installed
-        if auto_install is not None:
-            self.config_data['package_managers']['auto_install'] = auto_install
-        
-        self._save_config()
 # src/dotfile.py
 import os
 import shutil
@@ -411,7 +315,7 @@ class DotfileManager:
 
         return list(set(dependencies))  # Remove duplicates
 
-         def _check_nix_config(self, local_dir):
+    def _check_nix_config(self, local_dir):
       """Checks if a font file exists."""
       def _is_font_file(filename):
         font_extensions = [".ttf", ".otf", ".woff", ".woff2"]
@@ -449,12 +353,7 @@ class DotfileManager:
           else:
             self.logger.debug(f"Font: {font_name} is already installed")
       return True
-      """Checks if the repository contains a NixOS configuration."""
-      nix_files = ["flake.nix", "configuration.nix"]
-      for file in nix_files:
-        if os.path.exists(os.path.join(local_dir, file)):
-          return True
-      return False
+
 
     def _apply_nix_config(self, local_dir, package_manager):
        """Applies a NixOS configuration."""
@@ -480,11 +379,24 @@ class DotfileManager:
          return False
 
 
-    def _apply_config_directory(self, local_dir, directory, stow_options = []):
+    def _apply_config_directory(self, local_dir, directory, stow_options = [], overwrite_destination=None):
       """Applies the dotfiles using GNU Stow."""
-      stow_dir = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
+      if overwrite_destination and overwrite_destination.startswith("~"):
+           stow_dir = os.path.join(os.path.expanduser(overwrite_destination), os.path.basename(directory))
+      else:
+         stow_dir = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
       if os.path.basename(directory) != ".config" and not os.path.exists(stow_dir):
           os.makedirs(stow_dir, exist_ok = True)
+
+      # Handle overwriting logic
+      if overwrite_destination:
+          if overwrite_destination.startswith("~"):
+             target_path = os.path.expanduser(overwrite_destination)
+          else:
+            target_path = overwrite_destination
+          self._overwrite_symlinks(target_path, local_dir, directory)
+          return True
+
       stow_command = ["stow", "-v"]
       stow_command.extend(stow_options)
       stow_command.append(os.path.basename(directory))
@@ -494,18 +406,21 @@ class DotfileManager:
           return False
       return True
 
-    def _apply_cache_directory(self, local_dir, directory, stow_options = []):
-        """Applies a cache directory using GNU Stow."""
-        stow_command = ["stow", "-v"]
-        stow_command.extend(stow_options)
-        stow_command.append(os.path.basename(directory))
-        stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
-        if not stow_result or stow_result.returncode != 0:
-            self.logger.error(f"Failed to stow cache: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
-            return False
-        return True
-    def _apply_local_directory(self, local_dir, directory, stow_options = []):
-      """Applies a local directory using GNU Stow."""
+    
+    def _overwrite_symlinks(self, target_path, local_dir, directory):
+      """Overwrites symlinks when the user specifies a custom folder to install."""
+      dir_path = os.path.join(local_dir, directory)
+      if not os.path.exists(dir_path):
+        self.logger.warning(f"Could not find directory {dir_path} when trying to overwrite")
+        return False
+      
+      target_dir = os.path.join(target_path, os.path.basename(directory))
+      if os.path.exists(target_dir):
+        stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+        self._run_command(stow_command, check=False, cwd=local_dir)
+
+    def _apply_cache_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
+    """Applies a cache directory using GNU Stow."""
       stow_command = ["stow", "-v"]
       stow_command.extend(stow_options)
       stow_command.append(os.path.basename(directory))
@@ -514,6 +429,11 @@ class DotfileManager:
          self.logger.error(f"Failed to stow local files: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
          return False
       return True
+
+    def _apply_local_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
+       """Applies a local directory using GNU Stow."""
+       stow_command = ["stow", "-v"]
+       stow_command.extend(stow_options)
 
     def _apply_other_directory(self, local_dir, directory):
        """Applies files that aren't configs (wallpaper, scripts) into the home directory"""
