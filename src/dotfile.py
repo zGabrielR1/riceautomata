@@ -19,7 +19,6 @@ class DotfileManager:
         self.rules_config = self._load_rules()
         self.nix_installed = False
 
-
     def _ensure_managed_dir(self):
       """Create managed rices directory if it does not exist."""
       if not os.path.exists(self.managed_rices_dir):
@@ -106,14 +105,14 @@ class DotfileManager:
         elif dir_name == rule.get('name'):
             return True
       # Check by the name (Common dotfile directories)
-      common_names = ["nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", "gtk-3.0"]
+      common_names = ["nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", "gtk-3.0", "fish", "kitty"]
       if dir_name in common_names:
         return True
 
       # Check for common dotfile extensions
       for item in os.listdir(dir_path):
          if os.path.isfile(os.path.join(dir_path, item)):
-          if item.endswith((".conf", ".toml", ".yaml", ".json", ".config", ".sh", ".bash", ".zsh")):
+          if item.endswith((".conf", ".toml", ".yaml", ".json", ".config", ".sh", ".bash", ".zsh", ".fish")):
             return True
 
       # Check for specific content
@@ -121,7 +120,7 @@ class DotfileManager:
           if os.path.isfile(os.path.join(dir_path, item)):
            with open(os.path.join(dir_path, item), 'r', errors='ignore') as file:
              content = file.read(1024)
-             if any( keyword in content for keyword in ["nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", "sway", "gtk"]):
+             if any( keyword in content for keyword in ["nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", "sway", "gtk", "fish", "kitty"]):
               return True
 
       # if nothing is matched, don't consider a dotfile
@@ -139,6 +138,8 @@ class DotfileManager:
             return "icon"
         elif dir_name == "cache":
            return "cache"
+        elif dir_name == ".local":
+           return "local"
         else:
            return "config" # If not specified, consider as a config directory
 
@@ -258,6 +259,7 @@ class DotfileManager:
           self.logger.error(f"Failed to stow config: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
           return False
       return True
+
     def _apply_cache_directory(self, local_dir, directory, stow_options = []):
         """Applies a cache directory using GNU Stow."""
         stow_command = ["stow", "-v"]
@@ -268,6 +270,16 @@ class DotfileManager:
             self.logger.error(f"Failed to stow cache: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
             return False
         return True
+    def _apply_local_directory(self, local_dir, directory, stow_options = []):
+      """Applies a local directory using GNU Stow."""
+      stow_command = ["stow", "-v"]
+      stow_command.extend(stow_options)
+      stow_command.append(os.path.basename(directory))
+      stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
+      if not stow_result or stow_result.returncode != 0:
+         self.logger.error(f"Failed to stow local files: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
+         return False
+      return True
 
     def _apply_other_directory(self, local_dir, directory):
        """Applies files that aren't configs (wallpaper, scripts) into the home directory"""
@@ -348,6 +360,9 @@ class DotfileManager:
             elif category == "cache":
                 if not self._apply_cache_directory(local_dir, directory, stow_options):
                   applied_all = False
+            elif category == "local":
+                if not self._apply_local_directory(local_dir, directory, stow_options):
+                    applied_all = False
             else: # wallpaper, scripts, icons, etc.
                if not self._apply_other_directory(local_dir, directory):
                   applied_all = False
@@ -401,8 +416,14 @@ class DotfileManager:
           stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
           stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
           if not stow_result or stow_result.returncode != 0:
+             unlinked_all = False
+             self.logger.error(f"Failed to unstow cache: {directory}")
+        elif category == "local":
+           stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+           stow_result = self._run_command(stow_command, check=False, cwd=local_dir)
+           if not stow_result or stow_result.returncode != 0:
               unlinked_all = False
-              self.logger.error(f"Failed to unstow cache: {directory}")
+              self.logger.error(f"Failed to unstow local files: {directory}")
         else: #Other directories (wallpapers, scripts, etc).
             target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
             if os.path.exists(target_path):
@@ -450,6 +471,10 @@ class DotfileManager:
             target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) #Cache files into home.
             if not os.path.exists(target_path):
                continue
+          elif category == "local":
+            target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) # local files into home.
+            if not os.path.exists(target_path):
+                continue
           else:
             target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
             if not os.path.exists(target_path):
