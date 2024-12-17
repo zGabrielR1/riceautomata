@@ -5,10 +5,17 @@ import subprocess
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
 from src.script import ScriptRunner
+from src.backup import BackupManager
+from src.exceptions import (
+    RiceAutomataError, ConfigurationError, GitOperationError,
+    FileOperationError, ValidationError, RollbackError
+)
 import sys
 import re
 import json
 from jinja2 import Environment, FileSystemLoader
+from typing import Dict, List, Optional, Any
+import time
 
 logger = setup_logger()
 
@@ -17,6 +24,7 @@ class DotfileManager:
     def __init__(self, verbose=False):
         self.verbose = verbose
         self.config_manager = ConfigManager()
+        self.backup_manager = BackupManager()
         self.logger = setup_logger(verbose)
         self.managed_rices_dir = sanitize_path("~/.config/managed-rices")
         self._ensure_managed_dir()
@@ -25,121 +33,183 @@ class DotfileManager:
         self.nix_installed = False
         self.script_runner = ScriptRunner(verbose)
         self.template_env = Environment(loader=FileSystemLoader('/'))
+        self.max_retries = 3
+        self.retry_delay = 2  # seconds
 
     def _ensure_managed_dir(self):
-      """Create managed rices directory if it does not exist."""
-      if not os.path.exists(self.managed_rices_dir):
-          os.makedirs(self.managed_rices_dir, exist_ok = True)
+        """Create managed rices directory if it does not exist."""
+        try:
+            if not os.path.exists(self.managed_rices_dir):
+                os.makedirs(self.managed_rices_dir, exist_ok=True)
+        except Exception as e:
+            raise FileOperationError(f"Failed to create managed directory: {e}")
 
-    def _load_rules(self):
-      """Loads the rules to discover the dotfile directories"""
-      rules_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "rules.json")
-      try:
-        if os.path.exists(rules_path):
-            with open(rules_path, 'r') as f:
-              return json.load(f)
-        else:
-          return {}
-      except Exception as e:
-          self.logger.error(f"Could not load rules config: {e}")
-          return {}
+    def _retry_operation(self, operation, *args, **kwargs):
+        """Retry an operation with exponential backoff."""
+        for attempt in range(self.max_retries):
+            try:
+                return operation(*args, **kwargs)
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise
+                wait_time = self.retry_delay * (2 ** attempt)
+                self.logger.warning(f"Operation failed, retrying in {wait_time} seconds... Error: {e}")
+                time.sleep(wait_time)
 
-    def _load_dependency_map(self):
-      """Loads the dependency map to discover dependencies"""
-      dependency_map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "dependency_map.json")
-      try:
-        if os.path.exists(dependency_map_path):
-           with open(dependency_map_path, 'r') as f:
-              return json.load(f)
-        else:
-          return {}
-      except Exception as e:
-           self.logger.error(f"Could not load dependency map config: {e}")
-           return {}
-    
-    def clone_repository(self, repository_url):
-      """Clones a git repository."""
-      try:
-        repo_name = repository_url.split('/')[-1].replace(".git", "")
-        local_dir = os.path.join(self.managed_rices_dir, repo_name)
-        if os.path.exists(local_dir):
-          self.logger.error(f"Repository with same name already exists at {local_dir}")
-          return False
-        self.logger.info(f"Cloning repository into {local_dir}")
-        clone_result = self.script_runner._run_command(["git", "clone", repository_url, local_dir])
+    def clone_repository(self, repository_url: str) -> bool:
+        """Clones a git repository with retry and rollback support."""
+        backup_id = None
+        try:
+            repo_name = repository_url.split('/')[-1].replace(".git", "")
+            local_dir = os.path.join(self.managed_rices_dir, repo_name)
+            
+            if os.path.exists(local_dir):
+                raise GitOperationError(f"Repository already exists at {local_dir}")
+            
+            # Start backup operation
+            backup_id = self.backup_manager.start_operation_backup("clone_repository")
+            
+            self.logger.info(f"Cloning repository into {local_dir}")
+            def clone_op():
+                return self.script_runner._run_command(["git", "clone", repository_url, local_dir])
+            
+            clone_result = self._retry_operation(clone_op)
 
-        if clone_result:
-          self.logger.info(f"Repository cloned successfully to: {local_dir}")
-          timestamp = create_timestamp()
-          config = {
-            'repository_url': repository_url,
-            'local_directory': local_dir,
-            'dotfile_directories': {},  
-            'config_backup_path': None,
-            'dependencies': [],
-            'applied': False,
-            'timestamp': timestamp,
-            'nix_config': False,
-            'shell': "bash",
-              'script_config':{
-                  'pre_clone': [],
-                  'post_clone': [],
-                  'pre_install_dependencies': [],
-                  'post_install_dependencies': [],
-                  'pre_apply': [],
-                  'post_apply': [],
-                  'pre_uninstall': [],
-                  'post_uninstall': [],
-                  'shell': "bash"
-              },
-            'custom_extras_paths': {}
-          }
-          self.config_manager.add_rice_config(repo_name, config)
-          return True
-        else:
-            self.logger.error(f"Failed to clone repository: {repository_url}")
+            if clone_result:
+                self.logger.info(f"Repository cloned successfully to: {local_dir}")
+                timestamp = create_timestamp()
+                config = {
+                    'repository_url': repository_url,
+                    'local_directory': local_dir,
+                    'profiles': {
+                        'default': {
+                            'dotfile_directories': {},
+                            'dependencies': [],
+                            'script_config': {
+                                'pre_clone': [],
+                                'post_clone': [],
+                                'pre_install_dependencies': [],
+                                'post_install_dependencies': [],
+                                'pre_apply': [],
+                                'post_apply': [],
+                                'pre_uninstall': [],
+                                'post_uninstall': [],
+                                'shell': "bash"
+                            },
+                            'custom_extras_paths': {}
+                        }
+                    },
+                    'active_profile': 'default',
+                    'applied': False,
+                    'timestamp': timestamp,
+                    'nix_config': False
+                }
+                self.config_manager.add_rice_config(repo_name, config)
+                return True
+            else:
+                raise GitOperationError(f"Failed to clone repository: {repository_url}")
+
+        except Exception as e:
+            self.logger.error(f"Error during repository cloning: {e}")
+            if backup_id:
+                try:
+                    self.backup_manager.rollback_operation(backup_id)
+                except Exception as rollback_error:
+                    self.logger.error(f"Failed to rollback after clone error: {rollback_error}")
             return False
 
-      except Exception as e:
-         self.logger.error(f"Error cloning the repository: {repository_url}. Error: {e}")
-         return False
-    def _discover_scripts(self, local_dir):
-        """Discovers executable files inside a "scriptdata" directory, and sets them as script options."""
-        script_dir = os.path.join(local_dir, "scriptdata")
-        if not os.path.exists(script_dir) or not os.path.isdir(script_dir):
-             return {} # No script directory found, return empty dict.
-        script_phases = {
-            "pre_clone": [],
-            "post_clone": [],
-            "pre_install_dependencies": [],
-            "post_install_dependencies": [],
-            "pre_apply": [],
-            "post_apply": [],
-            "pre_uninstall": [],
-            "post_uninstall": [],
-        }
-        
-        for item in os.listdir(script_dir):
-           item_path = os.path.join(script_dir, item)
-           if os.path.isfile(item_path) and os.access(item_path, os.X_OK):
-              if item.startswith("pre_clone"):
-                 script_phases["pre_clone"].append(os.path.join("scriptdata",item))
-              elif item.startswith("post_clone"):
-                 script_phases["post_clone"].append(os.path.join("scriptdata",item))
-              elif item.startswith("pre_install_dependencies"):
-                 script_phases["pre_install_dependencies"].append(os.path.join("scriptdata", item))
-              elif item.startswith("post_install_dependencies"):
-                  script_phases["post_install_dependencies"].append(os.path.join("scriptdata",item))
-              elif item.startswith("pre_apply"):
-                  script_phases["pre_apply"].append(os.path.join("scriptdata", item))
-              elif item.startswith("post_apply"):
-                  script_phases["post_apply"].append(os.path.join("scriptdata", item))
-              elif item.startswith("pre_uninstall"):
-                script_phases["pre_uninstall"].append(os.path.join("scriptdata", item))
-              elif item.startswith("post_uninstall"):
-                script_phases["post_uninstall"].append(os.path.join("scriptdata", item))
-        return script_phases
+    def _load_rules(self):
+        """Loads the rules to discover the dotfile directories"""
+        try:
+            rules_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "rules.json")
+            if os.path.exists(rules_path):
+                with open(rules_path, 'r') as f:
+                    return json.load(f)
+            return {}
+        except json.JSONDecodeError as e:
+            raise ConfigurationError(f"Invalid JSON in rules config: {e}")
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load rules config: {e}")
 
+    def _load_dependency_map(self):
+        """Loads the dependency map to discover dependencies"""
+        try:
+            dependency_map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "dependency_map.json")
+            if os.path.exists(dependency_map_path):
+                with open(dependency_map_path, 'r') as f:
+                    return json.load(f)
+            return {}
+        except json.JSONDecodeError as e:
+            raise ConfigurationError(f"Invalid JSON in dependency map: {e}")
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load dependency map: {e}")
+
+    def _discover_scripts(self, local_dir: str) -> Dict[str, List[str]]:
+        """Discovers executable files inside a "scriptdata" directory."""
+        try:
+            script_dir = os.path.join(local_dir, "scriptdata")
+            if not os.path.exists(script_dir) or not os.path.isdir(script_dir):
+                return {}
+
+            script_phases = {
+                "pre_clone": [], "post_clone": [],
+                "pre_install_dependencies": [], "post_install_dependencies": [],
+                "pre_apply": [], "post_apply": [],
+                "pre_uninstall": [], "post_uninstall": []
+            }
+
+            for item in os.listdir(script_dir):
+                item_path = os.path.join(script_dir, item)
+                if os.path.isfile(item_path) and os.access(item_path, os.X_OK):
+                    script_path = os.path.join("scriptdata", item)
+                    for phase in script_phases:
+                        if item.startswith(phase):
+                            script_phases[phase].append(script_path)
+                            break
+
+            return script_phases
+        except Exception as e:
+            raise FileOperationError(f"Failed to discover scripts in {local_dir}: {e}")
+
+    def _validate_dotfile_directory(self, dir_path: str) -> None:
+        """Validates a dotfile directory."""
+        try:
+            if not os.path.exists(dir_path):
+                raise ValidationError(f"Directory does not exist: {dir_path}")
+            if not os.path.isdir(dir_path):
+                raise ValidationError(f"Path is not a directory: {dir_path}")
+            if not os.access(dir_path, os.R_OK):
+                raise ValidationError(f"Directory is not readable: {dir_path}")
+        except ValidationError:
+            raise
+        except Exception as e:
+            raise ValidationError(f"Failed to validate directory {dir_path}: {e}")
+
+    def _backup_file(self, file_path: str, operation_name: str) -> Optional[str]:
+        """Creates a backup of a file before modification."""
+        try:
+            if os.path.exists(file_path):
+                backup_id = self.backup_manager.start_operation_backup(operation_name)
+                self.backup_manager.backup_file(file_path)
+                return backup_id
+            return None
+        except Exception as e:
+            raise FileOperationError(f"Failed to backup file {file_path}: {e}")
+
+    def _safe_file_operation(self, operation_name: str, operation, *args, **kwargs):
+        """Executes a file operation with backup and rollback support."""
+        backup_id = None
+        try:
+            backup_id = self.backup_manager.start_operation_backup(operation_name)
+            result = operation(*args, **kwargs)
+            return result
+        except Exception as e:
+            if backup_id:
+                try:
+                    self.backup_manager.rollback_operation(backup_id)
+                except Exception as rollback_error:
+                    self.logger.error(f"Failed to rollback operation: {rollback_error}")
+            raise
 
     def _score_dir_name(self, dir_name):
         """Calculates score based on directory name and defined rules."""
@@ -537,7 +607,7 @@ class DotfileManager:
          self.logger.error(f"Error processing template: {template_path}. Error: {e}")
          return None
 
-    def _apply_templates(self, local_dir, dotfile_dirs, context):
+    def plates(self, local_dir, dotfile_dirs, context):
         """Applies all the templates with the correct context."""
         for directory, category in dotfile_dirs.items():
            dir_path = os.path.join(local_dir, directory)
@@ -557,6 +627,103 @@ class DotfileManager:
                          except Exception as e:
                            self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
         return True
+
+    def _apply_templates(self, source_dir: str, template_context: Optional[Dict[str, Any]] = None) -> None:
+        """Applies template variables to files."""
+        try:
+            if not template_context:
+                return
+
+            def process_template(file_path: str) -> None:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        template_str = f.read()
+                    
+                    # Check if file contains any Jinja2 template syntax
+                    if '{{' in template_str or '{%' in template_str:
+                        template = self.template_env.from_string(template_str)
+                        rendered = template.render(**template_context)
+                        
+                        # Backup before modifying
+                        backup_id = self._backup_file(file_path, "template_processing")
+                        
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(rendered)
+                except Exception as e:
+                    raise FileOperationError(f"Failed to process template {file_path}: {e}")
+
+            def walk_directory(current_dir: str) -> None:
+                try:
+                    for root, _, files in os.walk(current_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            if os.path.isfile(file_path):
+                                process_template(file_path)
+                except Exception as e:
+                    raise FileOperationError(f"Failed to walk directory {current_dir}: {e}")
+
+            self._safe_file_operation(
+                "apply_templates",
+                walk_directory,
+                source_dir
+            )
+        except Exception as e:
+            raise FileOperationError(f"Failed to apply templates in {source_dir}: {e}")
+
+    def _copy_dotfiles(self, source_dir: str, target_dir: str, backup_id: Optional[str] = None) -> None:
+        """Copies dotfiles with backup and rollback support."""
+        try:
+            self._validate_dotfile_directory(source_dir)
+            
+            def copy_operation():
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir, exist_ok=True)
+                
+                for item in os.listdir(source_dir):
+                    src = os.path.join(source_dir, item)
+                    dst = os.path.join(target_dir, item)
+                    
+                    if os.path.exists(dst):
+                        self.backup_manager.backup_file(dst)
+                    
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(src, dst)
+
+            self._safe_file_operation(
+                "copy_dotfiles",
+                copy_operation
+            )
+        except Exception as e:
+            raise FileOperationError(f"Failed to copy dotfiles from {source_dir} to {target_dir}: {e}")
+
+    def _remove_dotfiles(self, target_dir: str) -> None:
+        """Removes dotfiles with backup support."""
+        try:
+            self._validate_dotfile_directory(target_dir)
+            
+            def remove_operation():
+                backup_id = self.backup_manager.start_operation_backup("remove_dotfiles")
+                
+                for item in os.listdir(target_dir):
+                    path = os.path.join(target_dir, item)
+                    if os.path.exists(path):
+                        if os.path.isdir(path):
+                            self.backup_manager.backup_file(path)
+                            shutil.rmtree(path)
+                        else:
+                            self.backup_manager.backup_file(path)
+                            os.remove(path)
+                
+                return backup_id
+
+            self._safe_file_operation(
+                "remove_dotfiles",
+                remove_operation
+            )
+        except Exception as e:
+            raise FileOperationError(f"Failed to remove dotfiles from {target_dir}: {e}")
 
     def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}):
         """Applies dotfiles from a repository using GNU Stow."""
@@ -647,7 +814,7 @@ class DotfileManager:
                 return False
 
             #Apply templates
-            self._apply_templates(local_dir, dotfile_dirs, template_context)
+            self._apply_templates(local_dir, template_context)
 
             applied_all = True
             for directory, category in dotfile_dirs.items():

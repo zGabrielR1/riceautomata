@@ -1,11 +1,55 @@
-# src/config.py
+from src.exceptions import ConfigurationError, ValidationError
 import json
 import os
 from src.utils import sanitize_path, setup_logger
+from typing import Dict, Any, Optional
+import jsonschema
 
 logger = setup_logger()
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
 DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
+
+# Configuration schema for validation
+CONFIG_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "package_managers": {
+            "type": "object",
+            "properties": {
+                "preferred": {"type": ["string", "null"]},
+                "installed": {"type": "array", "items": {"type": "string"}},
+                "auto_install": {"type": "boolean"}
+            },
+            "required": ["preferred", "installed", "auto_install"]
+        },
+        "rices": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "repository_url": {"type": "string"},
+                    "local_directory": {"type": "string"},
+                    "profile": {"type": "string", "default": "default"},
+                    "active_profile": {"type": "string", "default": "default"},
+                    "profiles": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "dotfile_directories": {"type": "object"},
+                                "dependencies": {"type": "array"},
+                                "script_config": {"type": "object"},
+                                "custom_extras_paths": {"type": "object"}
+                            }
+                        }
+                    }
+                },
+                "required": ["repository_url", "local_directory"]
+            }
+        }
+    },
+    "required": ["package_managers", "rices"]
+}
 
 class ConfigManager:
 
@@ -18,15 +62,26 @@ class ConfigManager:
 
     def _ensure_config_dir(self):
         """Creates the config directory if it doesn't exist."""
-        if not os.path.exists(self.config_dir):
-            os.makedirs(self.config_dir, exist_ok=True)
+        try:
+            if not os.path.exists(self.config_dir):
+                os.makedirs(self.config_dir, exist_ok=True)
+        except Exception as e:
+            raise ConfigurationError(f"Failed to create config directory: {e}")
+
+    def _validate_config(self, config_data: Dict[str, Any]) -> None:
+        """Validates the configuration data against the schema."""
+        try:
+            jsonschema.validate(instance=config_data, schema=CONFIG_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise ValidationError(f"Configuration validation failed: {e.message}")
 
     def _load_config(self):
-        """Loads the configuration data from the JSON file."""
+        """Loads the configuration data from the JSON file with validation."""
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
                     self.config_data = json.load(f)
+                    self._validate_config(self.config_data)
             else:
                 self.config_data = {
                     'package_managers': {
@@ -37,50 +92,69 @@ class ConfigManager:
                     'rices': {}
                 }
                 self._save_config()
-            logger.debug(f"Configuration loaded from: {self.config_file}")
-
-        except FileNotFoundError:
-            logger.debug(f"Config file not found: {self.config_file}. Creating a new one.")
-            self.config_data = {
-                    'package_managers': {
-                        'preferred': None,
-                        'installed': [],
-                        'auto_install': False
-                    },
-                    'rices': {}
-                }
-            self._save_config()
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON from {self.config_file}: {e}. Check if it's valid JSON")
-            self.config_data = {
-                    'package_managers': {
-                        'preferred': None,
-                        'installed': [],
-                        'auto_install': False
-                    },
-                    'rices': {}
-                }
-            self._save_config()
+            raise ConfigurationError(f"Invalid JSON in config file: {e}")
         except Exception as e:
-            logger.error(f"Error loading configuration file: {e}")
-            self.config_data = {
-                    'package_managers': {
-                        'preferred': None,
-                        'installed': [],
-                        'auto_install': False
-                    },
-                    'rices': {}
-                }
-            self._save_config()
+            raise ConfigurationError(f"Failed to load configuration: {e}")
 
     def _save_config(self):
-        """Saves the configuration data to the JSON file."""
+        """Saves the configuration data to the JSON file with validation."""
         try:
+            self._validate_config(self.config_data)
             with open(self.config_file, 'w') as f:
                 json.dump(self.config_data, f, indent=4)
-                logger.debug(f"Config saved to {self.config_file}")
         except Exception as e:
-            logger.error(f"Error saving configuration file: {e}")
+            raise ConfigurationError(f"Failed to save configuration: {e}")
+
+    def create_profile(self, repository_name: str, profile_name: str) -> None:
+        """Creates a new profile for a repository."""
+        try:
+            if repository_name not in self.config_data['rices']:
+                raise ConfigurationError(f"Repository {repository_name} not found")
+            
+            rice_config = self.config_data['rices'][repository_name]
+            if 'profiles' not in rice_config:
+                rice_config['profiles'] = {}
+            
+            if profile_name in rice_config['profiles']:
+                raise ConfigurationError(f"Profile {profile_name} already exists")
+            
+            rice_config['profiles'][profile_name] = {
+                'dotfile_directories': {},
+                'dependencies': [],
+                'script_config': {},
+                'custom_extras_paths': {}
+            }
+            self._save_config()
+        except Exception as e:
+            raise ConfigurationError(f"Failed to create profile: {e}")
+
+    def switch_profile(self, repository_name: str, profile_name: str) -> None:
+        """Switches to a different profile for a repository."""
+        try:
+            if repository_name not in self.config_data['rices']:
+                raise ConfigurationError(f"Repository {repository_name} not found")
+            
+            rice_config = self.config_data['rices'][repository_name]
+            if 'profiles' not in rice_config or profile_name not in rice_config['profiles']:
+                raise ConfigurationError(f"Profile {profile_name} not found")
+            
+            rice_config['active_profile'] = profile_name
+            self._save_config()
+        except Exception as e:
+            raise ConfigurationError(f"Failed to switch profile: {e}")
+
+    def get_active_profile(self, repository_name: str) -> Optional[Dict[str, Any]]:
+        """Gets the active profile configuration for a repository."""
+        try:
+            rice_config = self.config_data['rices'].get(repository_name)
+            if not rice_config:
+                return None
+            
+            active_profile = rice_config.get('active_profile', 'default')
+            return rice_config.get('profiles', {}).get(active_profile)
+        except Exception as e:
+            raise ConfigurationError(f"Failed to get active profile: {e}")
 
     def get_rice_config(self, repository_name):
         """Gets configuration data for a given repository."""
