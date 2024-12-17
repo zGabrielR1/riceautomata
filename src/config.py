@@ -1,3 +1,4 @@
+# src/config.py
 import json
 import os
 from src.utils import sanitize_path, setup_logger
@@ -29,25 +30,48 @@ class ConfigManager:
             else:
                 self.config_data = {
                     'package_managers': {
-                        'preferred': None,  # User's preferred package manager
-                        'installed': [],    # List of installed package managers
-                        'auto_install': False  # Whether to auto-install package managers
+                        'preferred': None,
+                        'installed': [],
+                        'auto_install': False
                     },
-                    'rices': {}  # Rice configurations
+                    'rices': {}
                 }
                 self._save_config()
             logger.debug(f"Configuration loaded from: {self.config_file}")
 
         except FileNotFoundError:
             logger.debug(f"Config file not found: {self.config_file}. Creating a new one.")
-            self.config_data = {}
+            self.config_data = {
+                    'package_managers': {
+                        'preferred': None,
+                        'installed': [],
+                        'auto_install': False
+                    },
+                    'rices': {}
+                }
             self._save_config()
-        except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON from {self.config_file}. Check if it's valid JSON")
-            self.config_data = {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode JSON from {self.config_file}: {e}. Check if it's valid JSON")
+            self.config_data = {
+                    'package_managers': {
+                        'preferred': None,
+                        'installed': [],
+                        'auto_install': False
+                    },
+                    'rices': {}
+                }
             self._save_config()
         except Exception as e:
             logger.error(f"Error loading configuration file: {e}")
+            self.config_data = {
+                    'package_managers': {
+                        'preferred': None,
+                        'installed': [],
+                        'auto_install': False
+                    },
+                    'rices': {}
+                }
+            self._save_config()
 
     def _save_config(self):
         """Saves the configuration data to the JSON file."""
@@ -83,13 +107,25 @@ class ConfigManager:
     def set_package_manager_config(self, preferred=None, installed=None, auto_install=None):
         """Updates the package manager configuration."""
         if 'package_managers' not in self.config_data:
-            self.config_data['package_managers'] = {}
-        
+             self.config_data['package_managers'] = {
+                'preferred': None,
+                'installed': [],
+                'auto_install': False
+            }
+        config = self.config_data['package_managers']
         if preferred is not None:
-            self.config_data['package_managers']['preferred'] = preferred
+            config['preferred'] = preferred
         if installed is not None:
-            self.config_data['package_managers']['installed'] = installed
+            config['installed'] = installed
         if auto_install is not None:
-            self.config_data['package_managers']['auto_install'] = auto_install
-        
+            config['auto_install'] = auto_install
+        self._save_config()
+    
+    def set_rice_config(self, repository_name, key, value):
+        """Sets a value for a specific key for the rice configuration."""
+        if 'rices' not in self.config_data:
+            self.config_data['rices'] = {}
+        if repository_name not in self.config_data['rices']:
+            self.config_data['rices'][repository_name] = {}
+        self.config_data['rices'][repository_name][key] = value
         self._save_config()

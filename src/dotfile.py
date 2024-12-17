@@ -4,9 +4,12 @@ import shutil
 import subprocess
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
+from src.script import ScriptRunner
 import sys
 import re
 import json
+from jinja2 import Environment, FileSystemLoader
+
 logger = setup_logger()
 
 class DotfileManager:
@@ -20,6 +23,8 @@ class DotfileManager:
         self.rules_config = self._load_rules()
         self.dependency_map = self._load_dependency_map()
         self.nix_installed = False
+        self.script_runner = ScriptRunner(verbose)
+        self.template_env = Environment(loader=FileSystemLoader('/'))
 
     def _ensure_managed_dir(self):
       """Create managed rices directory if it does not exist."""
@@ -52,26 +57,6 @@ class DotfileManager:
            self.logger.error(f"Could not load dependency map config: {e}")
            return {}
     
-    def _run_command(self, command, check = True):
-      """Runs a command and returns the result."""
-      try:
-          result = subprocess.run(command, capture_output=True, text=True, check=check)
-          if check and result.stderr:
-              self.logger.error(f"Command failed: {command}")
-              self.logger.error(f"Error:\n{result.stderr}")
-              return False
-          if self.verbose:
-             self.logger.debug(f"Command ran successfully: {' '.join(command)}")
-             if result.stdout:
-              self.logger.debug(f"Output:\n{result.stdout}")
-          return result
-      except FileNotFoundError as e:
-          self.logger.error(f"Command not found: {command[0]}: {e}")
-          return False
-      except Exception as e:
-         self.logger.error(f"Error executing command: {command}. Error: {e}")
-         return False
-
     def clone_repository(self, repository_url):
       """Clones a git repository."""
       try:
@@ -81,7 +66,7 @@ class DotfileManager:
           self.logger.error(f"Repository with same name already exists at {local_dir}")
           return False
         self.logger.info(f"Cloning repository into {local_dir}")
-        clone_result = self._run_command(["git", "clone", repository_url, local_dir])
+        clone_result = self.script_runner._run_command(["git", "clone", repository_url, local_dir])
 
         if clone_result:
           self.logger.info(f"Repository cloned successfully to: {local_dir}")
@@ -94,7 +79,20 @@ class DotfileManager:
             'dependencies': [],
             'applied': False,
             'timestamp': timestamp,
-            'nix_config': False
+            'nix_config': False,
+            'shell': "bash",
+              'script_config':{
+                  'pre_clone': [],
+                  'post_clone': [],
+                  'pre_install_dependencies': [],
+                  'post_install_dependencies': [],
+                  'pre_apply': [],
+                  'post_apply': [],
+                  'pre_uninstall': [],
+                  'post_uninstall': [],
+                  'shell': "bash"
+              },
+            'custom_extras_paths': {}
           }
           self.config_manager.add_rice_config(repo_name, config)
           return True
@@ -105,70 +103,109 @@ class DotfileManager:
       except Exception as e:
          self.logger.error(f"Error cloning the repository: {repository_url}. Error: {e}")
          return False
-
-    def _is_likely_dotfile_dir(self, dir_path):
-        """Checks if the directory is likely to contain dotfiles based on its name, content, and rules."""
-        score = 0
-        dir_name = os.path.basename(dir_path)
+    def _discover_scripts(self, local_dir):
+        """Discovers executable files inside a "scriptdata" directory, and sets them as script options."""
+        script_dir = os.path.join(local_dir, "scriptdata")
+        if not os.path.exists(script_dir) or not os.path.isdir(script_dir):
+             return {} # No script directory found, return empty dict.
+        script_phases = {
+            "pre_clone": [],
+            "post_clone": [],
+            "pre_install_dependencies": [],
+            "post_install_dependencies": [],
+            "pre_apply": [],
+            "post_apply": [],
+            "pre_uninstall": [],
+            "post_uninstall": [],
+        }
         
-        # Check against rules from rules.json
+        for item in os.listdir(script_dir):
+           item_path = os.path.join(script_dir, item)
+           if os.path.isfile(item_path) and os.access(item_path, os.X_OK):
+              if item.startswith("pre_clone"):
+                 script_phases["pre_clone"].append(os.path.join("scriptdata",item))
+              elif item.startswith("post_clone"):
+                 script_phases["post_clone"].append(os.path.join("scriptdata",item))
+              elif item.startswith("pre_install_dependencies"):
+                 script_phases["pre_install_dependencies"].append(os.path.join("scriptdata", item))
+              elif item.startswith("post_install_dependencies"):
+                  script_phases["post_install_dependencies"].append(os.path.join("scriptdata",item))
+              elif item.startswith("pre_apply"):
+                  script_phases["pre_apply"].append(os.path.join("scriptdata", item))
+              elif item.startswith("post_apply"):
+                  script_phases["post_apply"].append(os.path.join("scriptdata", item))
+              elif item.startswith("pre_uninstall"):
+                script_phases["pre_uninstall"].append(os.path.join("scriptdata", item))
+              elif item.startswith("post_uninstall"):
+                script_phases["post_uninstall"].append(os.path.join("scriptdata", item))
+        return script_phases
+
+
+    def _score_dir_name(self, dir_name):
+        """Calculates score based on directory name and defined rules."""
+        score = 0
         for rule in self.rules_config.get('rules', []):
             if rule.get('regex'):
                 try:
                     if re.search(rule['regex'], dir_name):
-                        score += 3  # Higher weight for custom rules
+                        score += 3
                 except Exception as e:
                     self.logger.error(f"Error with rule regex: {rule['regex']}. Check your rules.json file. Error: {e}")
             elif dir_name == rule.get('name'):
                 score += 3
 
-        # Common desktop environment/window manager configs
         de_wm_names = [
-            "nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway", 
+            "nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway",
             "gtk-3.0", "fish", "kitty", "i3", "bspwm", "awesome", "polybar", "picom",
             "qtile", "xmonad", "openbox", "dwm", "eww", "wezterm", "foot", "ags"
         ]
         if dir_name in de_wm_names:
             score += 2
+        return score
 
-        # Check for common dotfile extensions
-        dotfile_extensions = [".conf", ".toml", ".yaml", ".yml", ".json", ".config", 
+    def _score_dotfile_content(self, dir_path):
+        """Calculates score based on the content of files in directory."""
+        score = 0
+        dotfile_extensions = [".conf", ".toml", ".yaml", ".yml", ".json", ".config",
                             ".sh", ".bash", ".zsh", ".fish", ".lua", ".vim", ".el", ".ini", ".ron", ".scss", ".js", ".xml"]
-        for item in os.listdir(dir_path):
-            if os.path.isfile(os.path.join(dir_path, item)):
-                if any(item.endswith(ext) for ext in dotfile_extensions):
-                    score += 1
-
-        # Check for specific content and configuration patterns
         config_keywords = [
-            "nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi", 
+            "nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi",
             "sway", "gtk", "fish", "kitty", "config", "theme", "colorscheme",
             "keybind", "workspace", "window", "border", "font", "opacity", "ags"
         ]
         
         for item in os.listdir(dir_path):
-            if os.path.isfile(os.path.join(dir_path, item)):
+            item_path = os.path.join(dir_path, item)
+            if os.path.isfile(item_path):
+                if any(item.endswith(ext) for ext in dotfile_extensions):
+                    score += 1
                 try:
-                    with open(os.path.join(dir_path, item), 'r', errors='ignore') as file:
+                    with open(item_path, 'r', errors='ignore') as file:
                         content = file.read(1024)  # Read first 1KB for performance
                         for keyword in config_keywords:
                             if keyword in content.lower():
                                 score += 0.5
                 except:
-                    pass  # Skip files that can't be read
+                   pass
+        return score
 
-        # Return true if score meets threshold
-        return score >= 2  # Adjust threshold as needed
+    def _is_likely_dotfile_dir(self, dir_path):
+        """Checks if the directory is likely to contain dotfiles based on its name, content, and rules."""
+        dir_name = os.path.basename(dir_path)
+        name_score = self._score_dir_name(dir_name)
+        content_score = self._score_dotfile_content(dir_path)
+        
+        return name_score + content_score >= 2  # Adjust threshold as needed
 
     def _categorize_dotfile_directory(self, dir_path):
         """Categorizes a dotfile directory as 'config', 'wallpaper', 'script', etc."""
         dir_name = os.path.basename(dir_path)
 
-        if dir_name == "wallpapers" or dir_name == "wallpaper" or dir_name == "backgrounds":
+        if dir_name in ["wallpapers", "wallpaper", "backgrounds"]:
            return "wallpaper"
-        elif dir_name == "scripts" or dir_name == "bin":
+        elif dir_name in ["scripts", "bin"]:
           return "script"
-        elif dir_name == "icons" or dir_name == "cursors":
+        elif dir_name in ["icons", "cursors"]:
             return "icon"
         elif dir_name == "cache":
            return "cache"
@@ -177,42 +214,51 @@ class DotfileManager:
         else:
            return "config" # If not specified, consider as a config directory
 
-    def _discover_dotfile_directories(self, local_dir, target_packages = None):
+    def _discover_dotfile_directories(self, local_dir, target_packages = None, custom_paths = None, ignore_rules = False):
         """Detects dotfile directories using the improved heuristics, and categorizes them."""
-        dotfile_dirs = {}  
+        dotfile_dirs = {}
+        if custom_paths: # If the user is using a custom folder
+            for path in custom_paths:
+                if os.path.exists(os.path.join(local_dir, path)):
+                    category = self._categorize_dotfile_directory(os.path.join(local_dir, path))
+                    dotfile_dirs[path] = category
+                else:
+                    self.logger.warning(f"Could not find custom path: {path}")
+            return dotfile_dirs
+
         for item in os.listdir(local_dir):
            item_path = os.path.join(local_dir, item)
            if os.path.isdir(item_path):
-              if target_packages: # If target packages are specified.
+              if target_packages:
                 if item in target_packages:
                      category = self._categorize_dotfile_directory(item_path)
                      dotfile_dirs[item] = category
-                if item == ".config": # First case, a .config folder in the root folder
+                if item == ".config":
                   for sub_item in os.listdir(item_path):
                     sub_item_path = os.path.join(item_path, sub_item)
-                    if os.path.isdir(sub_item_path) and self._is_likely_dotfile_dir(sub_item_path) and sub_item in target_packages:
+                    if os.path.isdir(sub_item_path) and (ignore_rules or self._is_likely_dotfile_dir(sub_item_path)) and sub_item in target_packages:
                       category = self._categorize_dotfile_directory(sub_item_path)
                       dotfile_dirs[os.path.join(item, sub_item)] = category
-                elif os.path.exists(os.path.join(item_path, ".config")): # Second case, a config folder inside another folder
+                elif os.path.exists(os.path.join(item_path, ".config")):
                    for sub_item in os.listdir(os.path.join(item_path, ".config")):
                      sub_item_path = os.path.join(item_path, ".config", sub_item)
-                     if os.path.isdir(sub_item_path) and self._is_likely_dotfile_dir(sub_item_path) and sub_item in target_packages:
+                     if os.path.isdir(sub_item_path) and (ignore_rules or self._is_likely_dotfile_dir(sub_item_path)) and sub_item in target_packages:
                         category = self._categorize_dotfile_directory(sub_item_path)
                         dotfile_dirs[os.path.join(item, ".config", sub_item)] = category
               else:
-                  if item == ".config":  # First case, a .config folder in the root folder
+                  if item == ".config":
                       for sub_item in os.listdir(item_path):
                           sub_item_path = os.path.join(item_path, sub_item)
-                          if os.path.isdir(sub_item_path) and self._is_likely_dotfile_dir(sub_item_path):
+                          if os.path.isdir(sub_item_path) and (ignore_rules or self._is_likely_dotfile_dir(sub_item_path)):
                               category = self._categorize_dotfile_directory(sub_item_path)
                               dotfile_dirs[os.path.join(item, sub_item)] = category
-                  elif os.path.exists(os.path.join(item_path, ".config")):  # Second case, a config folder inside another folder.
+                  elif os.path.exists(os.path.join(item_path, ".config")):
                       for sub_item in os.listdir(os.path.join(item_path, ".config")):
                           sub_item_path = os.path.join(item_path, ".config", sub_item)
-                          if os.path.isdir(sub_item_path) and self._is_likely_dotfile_dir(sub_item_path):
+                          if os.path.isdir(sub_item_path) and (ignore_rules or self._is_likely_dotfile_dir(sub_item_path)):
                               category = self._categorize_dotfile_directory(sub_item_path)
                               dotfile_dirs[os.path.join(item, ".config", sub_item)] = category
-                  elif self._is_likely_dotfile_dir(item_path):  # Third case, if the folder is the dotfile itself, like hypr, nvim, etc.
+                  elif (ignore_rules or self._is_likely_dotfile_dir(item_path)):
                       category = self._categorize_dotfile_directory(item_path)
                       dotfile_dirs[item] = category
         return dotfile_dirs
@@ -361,12 +407,12 @@ class DotfileManager:
        self.logger.info("Applying nix configuration.")
        try:
         nix_apply_command = ["nix", "build", ".#system", "--print-out-paths"]
-        nix_apply_result = self._run_command(nix_apply_command, cwd = local_dir)
+        nix_apply_result = self.script_runner._run_command(nix_apply_command, cwd = local_dir)
         if not nix_apply_result:
            return False
         profile_path = nix_apply_result.stdout.strip()
         nix_switch_command = ["sudo", "nix-env", "-p", "/nix/var/nix/profiles/system", "-i", profile_path]
-        switch_result = self._run_command(nix_switch_command)
+        switch_result = self.script_runner._run_command(nix_switch_command)
         if not switch_result:
             return False
         return True
@@ -375,17 +421,8 @@ class DotfileManager:
          self.logger.error(f"Error applying nix configuration: {e}")
          return False
 
-
-    def _apply_config_directory(self, local_dir, directory, stow_options = [], overwrite_destination=None):
-      """Applies the dotfiles using GNU Stow."""
-      if overwrite_destination and overwrite_destination.startswith("~"):
-           stow_dir = os.path.join(os.path.expanduser(overwrite_destination), os.path.basename(directory))
-      else:
-         stow_dir = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
-      if os.path.basename(directory) != ".config" and not os.path.exists(stow_dir):
-          os.makedirs(stow_dir, exist_ok = True)
-
-      # Handle overwriting logic
+    def _apply_directory_with_stow(self, local_dir, directory, stow_options = [], overwrite_destination = None):
+      """Applies the directory using GNU Stow with overwriting logic."""
       if overwrite_destination:
           if overwrite_destination.startswith("~"):
              target_path = os.path.expanduser(overwrite_destination)
@@ -397,13 +434,23 @@ class DotfileManager:
       stow_command = ["stow", "-v"]
       stow_command.extend(stow_options)
       stow_command.append(os.path.basename(directory))
-      stow_result = self._run_command(stow_command, check=False, cwd=local_dir)
+      stow_result = self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
       if not stow_result or stow_result.returncode != 0:
-          self.logger.error(f"Failed to stow config: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
+          self.logger.error(f"Failed to stow directory: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
           return False
       return True
 
-    
+
+    def _apply_config_directory(self, local_dir, directory, stow_options = [], overwrite_destination=None):
+      """Applies the dotfiles using GNU Stow."""
+      if overwrite_destination and overwrite_destination.startswith("~"):
+           stow_dir = os.path.join(os.path.expanduser(overwrite_destination), os.path.basename(directory))
+      else:
+         stow_dir = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
+      if os.path.basename(directory) != ".config" and not os.path.exists(stow_dir):
+          os.makedirs(stow_dir, exist_ok = True)
+      return self._apply_directory_with_stow(local_dir, directory, stow_options, overwrite_destination)
+
     def _overwrite_symlinks(self, target_path, local_dir, directory):
       """Overwrites symlinks when the user specifies a custom folder to install."""
       dir_path = os.path.join(local_dir, directory)
@@ -414,29 +461,15 @@ class DotfileManager:
       target_dir = os.path.join(target_path, os.path.basename(directory))
       if os.path.exists(target_dir):
         stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
-        self._run_command(stow_command, check=False, cwd=local_dir)
+        self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
 
     def _apply_cache_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
-    """Applies a cache directory using GNU Stow."""
-      stow_command = ["stow", "-v"]
-      stow_command.extend(stow_options)
-      stow_command.append(os.path.basename(directory))
-      stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
-      if not stow_result or stow_result.returncode != 0:
-         self.logger.error(f"Failed to stow local files: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
-         return False
-      return True
+        """Applies a cache directory using GNU Stow."""
+        return self._apply_directory_with_stow(local_dir, directory, stow_options, overwrite_destination)
 
     def _apply_local_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
        """Applies a local directory using GNU Stow."""
-       stow_command = ["stow", "-v"]
-       stow_command.extend(stow_options)
-       stow_command.append(os.path.basename(directory))
-       stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
-       if not stow_result or stow_result.returncode != 0:
-          self.logger.error(f"Failed to stow local files: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
-          return False
-       return True
+       return self._apply_directory_with_stow(local_dir, directory, stow_options, overwrite_destination)
 
     def _apply_other_directory(self, local_dir, directory):
        """Applies files that aren't configs (wallpaper, scripts) into the home directory"""
@@ -460,129 +493,215 @@ class DotfileManager:
           return False
        return True
     
-    def _apply_extra_directory(self, local_dir, directory):
-        """Applies files from the Extras directory"""
-        dir_path = os.path.join(local_dir, directory)
-        target_base = os.path.join("/") # Files from extras will be installed in this directory
-        target_path = os.path.join(target_base, os.path.basename(directory))
+    def _apply_extra_directory(self, local_dir, directory, target_base = "/"):
+       """Applies files from the Extras directory to a custom path"""
+       dir_path = os.path.join(local_dir, directory)
+       target_path = os.path.join(target_base, os.path.basename(directory))
 
-        if not os.path.exists(target_base):
-          os.makedirs(target_base, exist_ok=True) #create root folder if it does not exists.
+       if not os.path.exists(target_base):
+         os.makedirs(target_base, exist_ok=True) #create root folder if it does not exists.
 
-        try:
-            if os.path.exists(target_path): # if a folder already exists, abort.
-                self.logger.warning(f"Path {target_path} already exists, skipping...")
-                return False
-            shutil.copytree(dir_path, target_path)
-            self.logger.info(f"Copied directory {dir_path} to {target_path}")
-        except NotADirectoryError:
-            try:
-                shutil.copy2(dir_path, target_path)
-                self.logger.info(f"Copied file {dir_path} to {target_path}")
-            except Exception as e:
-                self.logger.error(f"Error copying file {dir_path} to {target_path}: {e}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Error copying directory {dir_path} to {target_path}: {e}")
-            return False
+       try:
+           if os.path.exists(target_path): # if a folder already exists, abort.
+               self.logger.warning(f"Path {target_path} already exists, skipping...")
+               return False
+           shutil.copytree(dir_path, target_path)
+           self.logger.info(f"Copied directory {dir_path} to {target_path}")
+       except NotADirectoryError:
+           try:
+               shutil.copy2(dir_path, target_path)
+               self.logger.info(f"Copied file {dir_path} to {target_path}")
+           except Exception as e:
+               self.logger.error(f"Error copying file {dir_path} to {target_path}: {e}")
+               return False
+       except Exception as e:
+           self.logger.error(f"Error copying directory {dir_path} to {target_path}: {e}")
+           return False
+       return True
+    
+    def _apply_custom_extras_directories(self, local_dir, custom_extras_paths):
+      """Applies the extra directories based on the configuration."""
+      for path, target in custom_extras_paths.items():
+          full_path = os.path.join(local_dir, path)
+          if os.path.exists(full_path):
+            self._apply_extra_directory(local_dir, path, target)
+          else:
+            self.logger.warning(f"Custom extras directory not found: {full_path}")
+    
+    def _process_template_file(self, template_path, context):
+       """Renders a template file with the given context."""
+       try:
+          template = self.template_env.get_template(template_path)
+          return template.render(context)
+       except Exception as e:
+         self.logger.error(f"Error processing template: {template_path}. Error: {e}")
+         return None
+
+    def _apply_templates(self, local_dir, dotfile_dirs, context):
+        """Applies all the templates with the correct context."""
+        for directory, category in dotfile_dirs.items():
+           dir_path = os.path.join(local_dir, directory)
+           if not os.path.exists(dir_path):
+                continue
+           for item in os.listdir(dir_path):
+              item_path = os.path.join(dir_path, item)
+              if os.path.isfile(item_path):
+                 if item.endswith(".tpl"):
+                    template_content = self._process_template_file(item_path, context)
+                    if template_content:
+                         output_path = item_path.replace(".tpl", "")
+                         try:
+                           with open(output_path, 'w') as f:
+                            f.write(template_content)
+                            self.logger.debug(f"Template {item_path} processed and saved in {output_path}")
+                         except Exception as e:
+                           self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
         return True
 
-    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None):
+    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}):
         """Applies dotfiles from a repository using GNU Stow."""
-        rice_config = self.config_manager.get_rice_config(repository_name)
-        if not rice_config:
-            self.logger.error(f"No configuration found for repository: {repository_name}")
-            return False
+        try:
+            rice_config = self.config_manager.get_rice_config(repository_name)
+            if not rice_config:
+                self.logger.error(f"No configuration found for repository: {repository_name}")
+                return False
 
-        local_dir = rice_config['local_directory']
-        nix_config = self._check_nix_config(local_dir)
-        rice_config['nix_config'] = nix_config
-        self.config_manager.add_rice_config(repository_name, rice_config)
-
-        if nix_config:
-          if not self._apply_nix_config(local_dir, package_manager):
-            return False
-          rice_config['applied'] = True
-          self.config_manager.add_rice_config(repository_name, rice_config)
-          self.logger.info("Nix configuration applied sucessfully")
-          return True
-        if target_packages:
-          if not isinstance(target_packages, list):
-            target_packages = [target_packages]
-          
-          # Minor Change to correctly print rice name when target packages are defined.
-          if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
-            self.logger.info(f"Applying dots for: {target_packages[0]}") # Added the index [0] to show the right name of the rice.
-          else:
-            self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
-        dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages)
-        if not dotfile_dirs:
-           self.logger.warning("No dotfile directories found. Aborting")
-           return False
-        # Check for multiple rices (top-level directories)
-        top_level_dirs = [os.path.basename(dir) for dir in dotfile_dirs if not os.path.dirname(dir)]
-        if len(top_level_dirs) > 1 and not target_packages:
-           chosen_rice = self._prompt_multiple_rices(top_level_dirs)
-           if not chosen_rice:
-              self.logger.warning("Installation aborted.")
-              return False
-           # Filter out all the other directories that aren't this one
-           dotfile_dirs = {dir: category for dir, category in dotfile_dirs.items() if os.path.basename(dir).startswith(chosen_rice)}
-           if not dotfile_dirs:
-            self.logger.error("No dotfiles were found with the specified rice name.")
-            return False
-
-        rice_config['dotfile_directories'] = dotfile_dirs
-        dependencies = self._discover_dependencies(local_dir, dotfile_dirs)
-        rice_config['dependencies'] = dependencies
-        self.config_manager.add_rice_config(repository_name, rice_config)
-        
-        # Install fonts before applying anything
-        if self._check_nix_config(local_dir) == False: # Do not install fonts if it's a nixos configuration.
-            if not self._install_fonts(local_dir, package_manager):
-               return False
-
-        applied_all = True
-        for directory, category in dotfile_dirs.items():
-            dir_path = os.path.join(local_dir, directory)
-            if not os.path.exists(dir_path):
-              self.logger.warning(f"Could not find directory: {dir_path}")
-              continue
-            if category == "config":
-              if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
-                applied_all = False
-            elif category == "cache":
-                if not self._apply_cache_directory(local_dir, directory, stow_options, overwrite_symlink):
-                  applied_all = False
-            elif category == "local":
-                if not self._apply_local_directory(local_dir, directory, stow_options, overwrite_symlink):
-                    applied_all = False
-            elif category == "script":
-                if not self._apply_other_directory(local_dir, directory): # Bin folders and other scripts
-                     applied_all = False
-            else: # wallpaper, scripts, icons, etc.
-               if not self._apply_other_directory(local_dir, directory):
-                  applied_all = False
-
-        extras_dir = os.path.join(local_dir, "Extras")
-        if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
-            self.logger.info("Found Extras folder, applying the files now.")
-            for item in os.listdir(extras_dir):
-                item_path = os.path.join(extras_dir, item)
-                if os.path.isdir(item_path):
-                    if not self._apply_extra_directory(local_dir, item_path):
-                       applied_all = False
-
-        if applied_all:
-            self.logger.info(f"Successfully applied dotfiles from {repository_name}")
-            rice_config['applied'] = True
+            local_dir = rice_config['local_directory']
+            nix_config = self._check_nix_config(local_dir)
+            rice_config['nix_config'] = nix_config
             self.config_manager.add_rice_config(repository_name, rice_config)
-            return True
-        else:
-           self.logger.error(f"Failed to apply all dotfiles")
-           return False
+            
+            # Discover scripts
+            script_config = self._discover_scripts(local_dir)
+            rice_config['script_config'].update(script_config)
+            self.config_manager.add_rice_config(repository_name, rice_config)
+            
+            # Execute pre clone scripts
+            env = os.environ.copy()
+            env['RICE_DIRECTORY'] = local_dir
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
+              return False
 
-    def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None):
+            if nix_config:
+              if not self._apply_nix_config(local_dir, package_manager):
+                return False
+              rice_config['applied'] = True
+              self.config_manager.add_rice_config(repository_name, rice_config)
+              self.logger.info("Nix configuration applied sucessfully")
+              return True
+            if target_packages:
+              if not isinstance(target_packages, list):
+                target_packages = [target_packages]
+              
+              # Minor Change to correctly print rice name when target packages are defined.
+              if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
+                self.logger.info(f"Applying dots for: {target_packages[0]}") # Added the index [0] to show the right name of the rice.
+              else:
+                self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
+            
+            # Execute post clone scripts
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_clone', rice_config.get('script_config'), env):
+                return False
+
+            dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
+            if not dotfile_dirs:
+               self.logger.warning("No dotfile directories found. Aborting")
+               return False
+            # Check for multiple rices (top-level directories)
+            top_level_dirs = [os.path.basename(dir) for dir in dotfile_dirs if not os.path.dirname(dir)]
+            if len(top_level_dirs) > 1 and not target_packages:
+               chosen_rice = self._prompt_multiple_rices(top_level_dirs)
+               if not chosen_rice:
+                  self.logger.warning("Installation aborted.")
+                  return False
+               # Filter out all the other directories that aren't this one
+               dotfile_dirs = {dir: category for dir, category in dotfile_dirs.items() if os.path.basename(dir).startswith(chosen_rice)}
+               if not dotfile_dirs:
+                self.logger.error("No dotfiles were found with the specified rice name.")
+                return False
+
+            rice_config['dotfile_directories'] = dotfile_dirs
+            dependencies = self._discover_dependencies(local_dir, dotfile_dirs)
+            rice_config['dependencies'] = dependencies
+            self.config_manager.add_rice_config(repository_name, rice_config)
+            
+            # Install fonts before applying anything
+            if self._check_nix_config(local_dir) == False: # Do not install fonts if it's a nixos configuration.
+                if not self._install_fonts(local_dir, package_manager):
+                   return False
+            
+            # Execute pre install dependencies scripts
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_install_dependencies', rice_config.get('script_config'), env):
+                return False
+                
+            # Install packages
+            if not package_manager.install(dependencies, local_dir = local_dir):
+                return False
+
+            # Execute post install dependencies scripts
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_install_dependencies', rice_config.get('script_config'), env):
+                return False
+
+            # Execute pre apply scripts
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_apply', rice_config.get('script_config'), env):
+                return False
+
+            #Apply templates
+            self._apply_templates(local_dir, dotfile_dirs, template_context)
+
+            applied_all = True
+            for directory, category in dotfile_dirs.items():
+                dir_path = os.path.join(local_dir, directory)
+                if not os.path.exists(dir_path):
+                  self.logger.warning(f"Could not find directory: {dir_path}")
+                  continue
+                if category == "config":
+                  if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
+                    applied_all = False
+                elif category == "cache":
+                    if not self._apply_cache_directory(local_dir, directory, stow_options, overwrite_symlink):
+                      applied_all = False
+                elif category == "local":
+                    if not self._apply_local_directory(local_dir, directory, stow_options, overwrite_symlink):
+                        applied_all = False
+                elif category == "script":
+                    if not self._apply_other_directory(local_dir, directory): # Bin folders and other scripts
+                         applied_all = False
+                else: # wallpaper, scripts, icons, etc.
+                   if not self._apply_other_directory(local_dir, directory):
+                      applied_all = False
+            
+            # Apply custom extras folders
+            custom_extras_paths = self.config_manager.get_rice_config(repository_name).get('custom_extras_paths')
+            if custom_extras_paths:
+                self._apply_custom_extras_directories(local_dir, custom_extras_paths)
+
+            extras_dir = os.path.join(local_dir, "Extras")
+            if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
+                self.logger.info("Found Extras folder, applying the files now.")
+                for item in os.listdir(extras_dir):
+                    item_path = os.path.join(extras_dir, item)
+                    if os.path.isdir(item_path):
+                        if not self._apply_extra_directory(local_dir, item_path):
+                           applied_all = False
+
+            # Execute post apply scripts
+            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_apply', rice_config.get('script_config'), env):
+                return False
+
+            if applied_all:
+                self.logger.info(f"Successfully applied dotfiles from {repository_name}")
+                rice_config['applied'] = True
+                self.config_manager.add_rice_config(repository_name, rice_config)
+                return True
+            else:
+               self.logger.error(f"Failed to apply all dotfiles")
+               return False
+        except Exception as e:
+            self.logger.error(f"An error occurred while applying dotfiles: {e}")
+            return False
+
+    def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, custom_paths = None, ignore_rules = False, template_context = {}):
          """Manages the dotfiles, uninstalling the previous rice, and applying the new one."""
          current_rice = None
          for key, value in self.config_manager.config_data.get('rices', {}).items():
@@ -594,136 +713,156 @@ class DotfileManager:
            if not self._uninstall_dotfiles(current_rice):
              return False
 
-         if not self.apply_dotfiles(repository_name, stow_options, package_manager, target_packages):
+         if not self.apply_dotfiles(repository_name, stow_options, package_manager, target_packages, custom_paths = custom_paths, ignore_rules = ignore_rules, template_context = template_context):
            return False
          return True
 
     def _uninstall_dotfiles(self, repository_name):
       """Uninstalls all the dotfiles, from a previous rice."""
-      rice_config = self.config_manager.get_rice_config(repository_name)
-      if not rice_config:
-          self.logger.error(f"No config found for repository: {repository_name}")
-          return False
-      local_dir = rice_config['local_directory']
-      dotfile_dirs = rice_config['dotfile_directories']
-      unlinked_all = True
-      for directory, category in dotfile_dirs.items():
-        if category == "config":
-          target_path = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
-          if not os.path.exists(target_path):
-             self.logger.warning(f"Could not find config directory: {target_path}. Skipping...")
-             continue
-          stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
-          stow_result = self._run_command(stow_command, check = False, cwd = local_dir)
-          if not stow_result or stow_result.returncode != 0:
-              unlinked_all = False
-              self.logger.error(f"Failed to unstow config: {directory} from {target_path}")
-        elif category == "cache":
-          stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
-          stow_result = self._run_command(stow_command, check = False, cwd=local_dir)
-          if not stow_result or stow_result.returncode != 0:
-             unlinked_all = False
-             self.logger.error(f"Failed to unstow cache: {directory}")
-        elif category == "local":
-           stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
-           stow_result = self._run_command(stow_command, check=False, cwd=local_dir)
-           if not stow_result or stow_result.returncode != 0:
-              unlinked_all = False
-              self.logger.error(f"Failed to unstow local files: {directory}")
-        else: #Other directories (wallpapers, scripts, etc).
-            target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
-            if os.path.exists(target_path):
-               try:
-                 shutil.rmtree(target_path)
-                 self.logger.debug(f"Removed directory: {target_path}")
-               except NotADirectoryError:
-                 try:
-                  os.remove(target_path)
-                  self.logger.debug(f"Removed file: {target_path}")
-                 except Exception as e:
-                   self.logger.error(f"Error removing file: {target_path}. Error: {e}")
-               except Exception as e:
-                   self.logger.error(f"Error removing directory {target_path}: {e}")
-            else:
-              self.logger.warning(f"Could not find other directory: {target_path}. Skipping...")
-      
-      # Uninstall Extras
-      extras_dir = os.path.join(local_dir, "Extras")
-      if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
-          for item in os.listdir(extras_dir):
-            item_path = os.path.join(extras_dir, item)
-            target_path = os.path.join("/", item)
-            if os.path.exists(target_path):
-                try:
-                  shutil.rmtree(target_path)
-                  self.logger.debug(f"Removed extra directory: {target_path}")
-                except NotADirectoryError:
-                  try:
-                    os.remove(target_path)
-                    self.logger.debug(f"Removed extra file: {target_path}")
-                  except Exception as e:
-                    self.logger.error(f"Error removing file from Extras: {target_path}. Error: {e}")
-                except Exception as e:
-                   self.logger.error(f"Error removing extra directory: {target_path}. Error: {e}")
-            else:
-               self.logger.warning(f"Could not find extra directory: {target_path}. Skipping...")
+      try:
+          rice_config = self.config_manager.get_rice_config(repository_name)
+          if not rice_config:
+              self.logger.error(f"No config found for repository: {repository_name}")
+              return False
+          local_dir = rice_config['local_directory']
+          dotfile_dirs = rice_config['dotfile_directories']
+          unlinked_all = True
 
-      if unlinked_all:
-            self.logger.info(f"Successfully uninstalled the dotfiles for: {repository_name}")
-            rice_config['applied'] = False
-            self.config_manager.add_rice_config(repository_name, rice_config)
-            return True
-      else:
-        self.logger.error("Failed to unlink all the symlinks.")
+          # Execute pre uninstall scripts
+          env = os.environ.copy()
+          env['RICE_DIRECTORY'] = local_dir
+          if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_uninstall', rice_config.get('script_config'), env):
+                return False
+
+          for directory, category in dotfile_dirs.items():
+            if category == "config":
+              target_path = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
+              if not os.path.exists(target_path):
+                 self.logger.warning(f"Could not find config directory: {target_path}. Skipping...")
+                 continue
+              stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+              stow_result = self.script_runner._run_command(stow_command, check = False, cwd = local_dir)
+              if not stow_result or stow_result.returncode != 0:
+                  unlinked_all = False
+                  self.logger.error(f"Failed to unstow config: {directory} from {target_path}")
+            elif category == "cache":
+              stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+              stow_result = self.script_runner._run_command(stow_command, check = False, cwd=local_dir)
+              if not stow_result or stow_result.returncode != 0:
+                 unlinked_all = False
+                 self.logger.error(f"Failed to unstow cache: {directory}")
+            elif category == "local":
+               stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
+               stow_result = self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
+               if not stow_result or stow_result.returncode != 0:
+                  unlinked_all = False
+                  self.logger.error(f"Failed to unstow local files: {directory}")
+            else: #Other directories (wallpapers, scripts, etc).
+                target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
+                if os.path.exists(target_path):
+                   try:
+                     shutil.rmtree(target_path)
+                     self.logger.debug(f"Removed directory: {target_path}")
+                   except NotADirectoryError:
+                     try:
+                      os.remove(target_path)
+                      self.logger.debug(f"Removed file: {target_path}")
+                     except Exception as e:
+                       self.logger.error(f"Error removing file: {target_path}. Error: {e}")
+                   except Exception as e:
+                       self.logger.error(f"Error removing directory {target_path}: {e}")
+                else:
+                  self.logger.warning(f"Could not find other directory: {target_path}. Skipping...")
+          
+          # Uninstall Extras
+          extras_dir = os.path.join(local_dir, "Extras")
+          if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
+              for item in os.listdir(extras_dir):
+                item_path = os.path.join(extras_dir, item)
+                target_path = os.path.join("/", item)
+                if os.path.exists(target_path):
+                    try:
+                      shutil.rmtree(target_path)
+                      self.logger.debug(f"Removed extra directory: {target_path}")
+                    except NotADirectoryError:
+                      try:
+                        os.remove(target_path)
+                        self.logger.debug(f"Removed extra file: {target_path}")
+                      except Exception as e:
+                        self.logger.error(f"Error removing file from Extras: {target_path}. Error: {e}")
+                    except Exception as e:
+                       self.logger.error(f"Error removing extra directory: {target_path}. Error: {e}")
+                else:
+                   self.logger.warning(f"Could not find extra directory: {target_path}. Skipping...")
+          
+          # Execute post uninstall scripts
+          if not self.script_runner.run_scripts_by_phase(local_dir, 'post_uninstall', rice_config.get('script_config'), env):
+                return False
+
+          if unlinked_all:
+                self.logger.info(f"Successfully uninstalled the dotfiles for: {repository_name}")
+                rice_config['applied'] = False
+                self.config_manager.add_rice_config(repository_name, rice_config)
+                return True
+          else:
+            self.logger.error("Failed to unlink all the symlinks.")
+            return False
+      except Exception as e:
+        self.logger.error(f"An error ocurred while uninstalling dotfiles: {e}")
         return False
 
     def create_backup(self, repository_name, backup_name):
        """Creates a backup of the applied configuration."""
-       rice_config = self.config_manager.get_rice_config(repository_name)
-       if not rice_config or not rice_config.get('applied', False):
-           self.logger.error(f"No rice applied for {repository_name}. Can't create backup.")
-           return False
-       backup_dir = os.path.join(rice_config['local_directory'], "backups", backup_name)
-       if os.path.exists(backup_dir):
-         self.logger.error(f"Backup with the name {backup_name} already exists. Aborting.")
-         return False
+       try:
+            rice_config = self.config_manager.get_rice_config(repository_name)
+            if not rice_config or not rice_config.get('applied', False):
+                self.logger.error(f"No rice applied for {repository_name}. Can't create backup.")
+                return False
+            backup_dir = os.path.join(rice_config['local_directory'], "backups", backup_name)
+            if os.path.exists(backup_dir):
+              self.logger.error(f"Backup with the name {backup_name} already exists. Aborting.")
+              return False
 
-       os.makedirs(backup_dir, exist_ok=True)
+            os.makedirs(backup_dir, exist_ok=True)
 
-       for directory, category in rice_config['dotfile_directories'].items():
-          if category == "config":
-            target_path = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
-            if not os.path.exists(target_path):
-               continue
-          elif category == "cache":
-            target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) #Cache files into home.
-            if not os.path.exists(target_path):
-               continue
-          elif category == "local":
-            target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) # local files into home.
-            if not os.path.exists(target_path):
-                continue
-          else:
-            target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
-            if not os.path.exists(target_path):
-                continue
-          backup_target = os.path.join(backup_dir, os.path.basename(directory))
-          try:
-            shutil.copytree(target_path, backup_target)
-            self.logger.debug(f"Copied {target_path} to {backup_target}")
-          except NotADirectoryError:
-               try:
-                   shutil.copy2(target_path, backup_target)
-                   self.logger.debug(f"Copied file {target_path} to {backup_target}")
-               except Exception as e:
-                   self.logger.error(f"Error copying file {target_path}: {e}")
-          except Exception as e:
-                self.logger.error(f"Error copying directory {target_path}: {e}")
-          rice_config['config_backup_path'] = backup_dir
-          self.config_manager.add_rice_config(repository_name, rice_config)
+            for directory, category in rice_config['dotfile_directories'].items():
+              if category == "config":
+                target_path = os.path.join(os.path.expanduser("~/.config"), os.path.basename(directory))
+                if not os.path.exists(target_path):
+                   continue
+              elif category == "cache":
+                target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) #Cache files into home.
+                if not os.path.exists(target_path):
+                   continue
+              elif category == "local":
+                target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory)) # local files into home.
+                if not os.path.exists(target_path):
+                    continue
+              else:
+                target_path = os.path.join(os.path.expanduser("~"), os.path.basename(directory))
+                if not os.path.exists(target_path):
+                    continue
+              backup_target = os.path.join(backup_dir, os.path.basename(directory))
+              try:
+                shutil.copytree(target_path, backup_target)
+                self.logger.debug(f"Copied {target_path} to {backup_target}")
+              except NotADirectoryError:
+                   try:
+                       shutil.copy2(target_path, backup_target)
+                       self.logger.debug(f"Copied file {target_path} to {backup_target}")
+                   except Exception as e:
+                       self.logger.error(f"Error copying file {target_path}: {e}")
+              except Exception as e:
+                    self.logger.error(f"Error copying directory {target_path}: {e}")
+              rice_config['config_backup_path'] = backup_dir
+              self.config_manager.add_rice_config(repository_name, rice_config)
 
-       self.logger.info(f"Backup created successfully at {backup_dir}")
-       return True
+            self.logger.info(f"Backup created successfully at {backup_dir}")
+            return True
+       except Exception as e:
+        self.logger.error(f"An error occurred while creating backup: {e}")
+        return False
+
     def _prompt_multiple_rices(self, rice_names):
         """Prompts the user to choose which rice to install from multiple options."""
         self.logger.warning(f"Multiple rices detected: {', '.join(rice_names)}. Please choose which one you would like to install.")

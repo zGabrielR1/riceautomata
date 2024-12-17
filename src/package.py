@@ -1,8 +1,10 @@
+# src/package.py
 import subprocess
 import os
 import shutil
 from src.utils import setup_logger, confirm_action
 import sys
+import json
 
 logger = setup_logger()
 
@@ -86,19 +88,35 @@ class PackageManager:
     def _install_system_package(self, package):
         """Installs a package using the system package manager."""
         if self.system_package_manager == "pacman":
-            if self._check_paru():
-              if self.aur_helper == "paru":
-                return self._run_command(["paru", "-S", "--noconfirm", package])
-              else:
-                return self._run_command(["yay", "-S", "--noconfirm", package])
-            return self._run_command(["sudo", "pacman", "-S", "--noconfirm", package])
+            return self._install_pacman_package(package)
         elif self.system_package_manager == "apt":
-            return self._run_command(["sudo", "apt", "install", "-y", package])
+            return self._install_apt_package(package)
         elif self.system_package_manager == "dnf":
-            return self._run_command(["sudo", "dnf", "install", "-y", package])
+            return self._install_dnf_package(package)
         elif self.system_package_manager == "zypper":
-            return self._run_command(["sudo", "zypper", "install", "-y", package])
+            return self._install_zypper_package(package)
         return False
+
+    def _install_pacman_package(self, package):
+        """Installs a package using pacman."""
+        if self._check_paru():
+          if self.aur_helper == "paru":
+            return self._run_command(["paru", "-S", "--noconfirm", package])
+          else:
+            return self._run_command(["yay", "-S", "--noconfirm", package])
+        return self._run_command(["sudo", "pacman", "-S", "--noconfirm", package])
+
+    def _install_apt_package(self, package):
+      """Installs a package using apt."""
+      return self._run_command(["sudo", "apt", "install", "-y", package])
+    
+    def _install_dnf_package(self, package):
+        """Installs a package using dnf."""
+        return self._run_command(["sudo", "dnf", "install", "-y", package])
+    
+    def _install_zypper_package(self, package):
+       """Installs a package using zypper."""
+       return self._run_command(["sudo", "zypper", "install", "-y", package])
 
     def _install_pip_package(self, package):
         """Installs a Python package using pip."""
@@ -124,20 +142,35 @@ class PackageManager:
     def _install_aur_package(self, package):
         """Installs an AUR package using paru."""
         if not self._check_paru():
-          if not self._install_paru():
+          if not self._install_aur_helper():
             self.logger.error(f"AUR Helper not installed, and failed to install it, can't install package: {package}")
             return False
         if self.aur_helper == "paru":
             return self._run_command(["paru", "-S", "--noconfirm", package])
         else:
             return self._run_command(["yay", "-S", "--noconfirm", package])
+    
+    def _install_custom_aur_package(self, local_dir, package):
+        """Installs a custom AUR package using paru."""
+        pkgbuild_path = os.path.join(local_dir, package, "PKGBUILD")
+        if not os.path.exists(pkgbuild_path):
+            self.logger.error(f"PKGBUILD not found for custom aur package: {package}")
+            return False
+        if self._check_paru():
+            if self.aur_helper == "paru":
+                return self._run_command(["paru", "-S", "--noconfirm", "-B", os.path.dirname(pkgbuild_path)])
+            else:
+                return self._run_command(["yay", "-S", "--noconfirm", "-B", os.path.dirname(pkgbuild_path)])
+        else:
+           self.logger.error(f"AUR helper {self.aur_helper} not found. Please install it to install custom packages.")
+           return False
 
     def _run_command(self, command, check=True):
       """Runs a command and returns the result."""
       try:
           result = subprocess.run(command, capture_output=True, text=True, check=check)
           if check and result.stderr:
-              self.logger.error(f"Command failed: {command}")
+              self.logger.error(f"Command failed: {' '.join(command)}")
               self.logger.error(f"Error:\n{result.stderr}")
               return False
 
@@ -159,29 +192,41 @@ class PackageManager:
       paru_result = self._run_command(["paru", "--version"], check=False)
       return paru_result and paru_result.returncode == 0
 
-    def _install_paru(self):
-      """Tries to install Paru."""
+    def _install_aur_helper(self):
+      """Installs an AUR Helper (Paru or Yay)."""
       if self.verbose:
-        self.logger.info("Paru not found, trying to install it.")
-      install_paru_result = self._run_command(["sudo", "pacman", "-S", "--noconfirm", "paru"], check=False)
-      if install_paru_result and install_paru_result.returncode == 0:
-        self.logger.info("Paru installed successfully.")
-        return True
-
-      self.logger.warning("Failed to install Paru with pacman, trying to install with yay instead.")
-      install_yay_result = self._run_command(["sudo", "pacman", "-S", "--noconfirm", "yay"], check=False)
-      if install_yay_result and install_yay_result.returncode == 0:
-          self.logger.info("Yay installed successfully.")
-          install_paru_yay_result = self._run_command(["yay", "-S", "--noconfirm", "paru"], check=False)
-          if install_paru_yay_result and install_paru_yay_result.returncode == 0:
-              self.logger.info("Paru installed successfully using yay")
-              return True
-          else:
-            self.logger.error("Failed to install paru with yay")
-            return False
+        self.logger.info(f"{self.aur_helper} not found, trying to install it.")
+      if self.aur_helper == "paru":
+        install_result = self._run_command(["sudo", "pacman", "-S", "--noconfirm", "paru"], check=False)
+        if install_result and install_result.returncode == 0:
+            self.logger.info("Paru installed successfully.")
+            return True
+        else:
+           self.logger.warning("Failed to install Paru with pacman, trying to install with yay instead.")
+           return self._install_yay()
+      elif self.aur_helper == "yay":
+        return self._install_yay()
       else:
-        self.logger.error("Failed to install yay")
+        self.logger.error("Invalid AUR Helper specified.")
         return False
+
+    def _install_yay(self):
+        """Tries to install yay."""
+        install_yay_result = self._run_command(["sudo", "pacman", "-S", "--noconfirm", "yay"], check=False)
+        if install_yay_result and install_yay_result.returncode == 0:
+              self.logger.info("Yay installed successfully.")
+              if self.aur_helper == "paru":
+                  install_paru_yay_result = self._run_command(["yay", "-S", "--noconfirm", "paru"], check=False)
+                  if install_paru_yay_result and install_paru_yay_result.returncode == 0:
+                      self.logger.info("Paru installed successfully using yay")
+                      return True
+                  else:
+                       self.logger.error("Failed to install paru with yay")
+                       return False
+              return True
+        else:
+           self.logger.error("Failed to install yay")
+           return False
 
     def _check_nix(self):
       """Checks if Nix is installed."""
@@ -222,64 +267,108 @@ class PackageManager:
           self.logger.error(f"Error installing font manually: {e}")
           return False
 
-    def install(self, packages, use_paru = True):
+    def install(self, packages, use_paru = True, local_dir = None):
         """Installs the list of packages using the package manager, with user confirmation."""
         if packages:
             if self.verbose:
                 self.logger.info(f"Attempting to install packages: {', '.join(packages)}")
-                if not self._install_packages(packages, use_paru):
+                if not self._install_packages(packages, use_paru, local_dir):
                   return False
                 return True
             else:
                 if confirm_action(f"Do you want to install these packages?: {', '.join(packages)}"):
-                  if not self._install_packages(packages, use_paru):
+                  if not self._install_packages(packages, use_paru, local_dir):
                     return False
                   return True
         return True
 
-    def _install_packages(self, packages, use_paru = True):
-        """Installs a list of packages using the package manager."""
-        if not packages:
-          self.logger.debug("No packages to install")
-          return True
-        if use_paru and self.system_package_manager == "pacman" and not self._check_paru():
-          if not self._install_paru():
-            self.logger.error("Can't use paru, and failed to install it. Please install manually.")
-            return False
-        if self.nix_installed:
-            if self.verbose:
-                self.logger.info(f"Installing packages using nix: {', '.join(packages)}")
-            nix_result = self._run_command(["nix", "profile", "install", "--packages"] + packages, check=False)
-            if nix_result and nix_result.returncode == 0:
-                self.logger.info(f"Packages installed using nix: {', '.join(packages)}")
-                return True
-            else:
-                self.logger.error(f"Failed to install using nix: {packages}")
-                return False
-        else:
-          install_command = []
-          if self.system_package_manager == "pacman":
-            install_command.extend(["sudo", "pacman", "-S", "--noconfirm"])
-            if use_paru and self._check_paru():
-              if self.aur_helper == "paru":
-                install_command = ["paru", "-S", "--noconfirm"]
-              else:
-                install_command = ["yay", "-S", "--noconfirm"]
-          elif self.system_package_manager == "apt":
-              install_command.extend(["sudo", "apt", "install", "-y"])
-          elif self.system_package_manager == "dnf":
-              install_command.extend(["sudo", "dnf", "install", "-y"])
-          elif self.system_package_manager == "zypper":
-            install_command.extend(["sudo", "zypper", "install", "-y"])
-          install_command.extend(packages)
-
-          install_result = self._run_command(install_command)
-          if install_result and install_result.returncode == 0:
-            self.logger.info(f"Packages installed: {', '.join(packages)}")
-            return True
+    def _install_packages(self, packages, use_paru = True, local_dir = None):
+      """Installs a list of packages using the package manager."""
+      if not packages:
+        self.logger.debug("No packages to install")
+        return True
+      if use_paru and self.system_package_manager == "pacman" and not self._check_paru():
+        if not self._install_aur_helper():
+           self.logger.error("Can't use paru, and failed to install it. Please install manually.")
+           return False
+      if self.nix_installed:
+          if self.verbose:
+              self.logger.info(f"Installing packages using nix: {', '.join(packages)}")
+          nix_result = self._run_command(["nix", "profile", "install", "--packages"] + packages, check=False)
+          if nix_result and nix_result.returncode == 0:
+              self.logger.info(f"Packages installed using nix: {', '.join(packages)}")
+              return True
           else:
-              self.logger.error(f"Failed to install packages: {', '.join(packages)}")
+              self.logger.error(f"Failed to install using nix: {packages}")
               return False
+      else:
+          for package in packages:
+             if package.startswith("aur:"):
+                package_name = package.split(":",1)[1]
+                if not self._install_custom_aur_package(local_dir, package_name):
+                    return False
+             elif self.system_package_manager == "pacman":
+                if not self._install_pacman_packages(package, use_paru):
+                     return False
+             elif self.system_package_manager == "apt":
+                 if not self._install_apt_packages(package):
+                     return False
+             elif self.system_package_manager == "dnf":
+                 if not self._install_dnf_packages(package):
+                    return False
+             elif self.system_package_manager == "zypper":
+               if not self._install_zypper_packages(package):
+                  return False
+          return True
+    def _install_pacman_packages(self, package, use_paru = True):
+        """Installs a list of packages using pacman."""
+        install_command = ["sudo", "pacman", "-S", "--noconfirm"]
+        if use_paru and self._check_paru():
+          if self.aur_helper == "paru":
+            install_command = ["paru", "-S", "--noconfirm"]
+          else:
+            install_command = ["yay", "-S", "--noconfirm"]
+        install_command.append(package)
+        install_result = self._run_command(install_command)
+        if install_result and install_result.returncode == 0:
+            self.logger.info(f"Packages installed: {package}")
+            return True
+        else:
+            self.logger.error(f"Failed to install packages: {package}")
+            return False
+
+    def _install_apt_packages(self, package):
+        """Installs a list of packages using apt."""
+        install_command = ["sudo", "apt", "install", "-y", package]
+        install_result = self._run_command(install_command)
+        if install_result and install_result.returncode == 0:
+            self.logger.info(f"Packages installed: {package}")
+            return True
+        else:
+            self.logger.error(f"Failed to install packages: {package}")
+            return False
+    
+    def _install_dnf_packages(self, package):
+        """Installs a list of packages using dnf."""
+        install_command = ["sudo", "dnf", "install", "-y", package]
+        install_result = self._run_command(install_command)
+        if install_result and install_result.returncode == 0:
+            self.logger.info(f"Packages installed: {package}")
+            return True
+        else:
+            self.logger.error(f"Failed to install packages: {package}")
+            return False
+    
+    def _install_zypper_packages(self, package):
+        """Installs a list of packages using zypper."""
+        install_command = ["sudo", "zypper", "install", "-y", package]
+        install_result = self._run_command(install_command)
+        if install_result and install_result.returncode == 0:
+            self.logger.info(f"Packages installed: {package}")
+            return True
+        else:
+            self.logger.error(f"Failed to install packages: {package}")
+            return False
 
     def is_installed(self, package):
       """Checks if a package is installed using the package manager."""

@@ -2,12 +2,13 @@ import logging
 import os
 import sys
 from datetime import datetime
+import traceback
 
 def setup_logger(verbose=False, log_file=None):
     """Sets up the logger for the application."""
 
     log_level = logging.DEBUG if verbose else logging.INFO
-    log_format = "[%(asctime)s] [%(levelname)s] %(message)s"
+    log_format = "[%(asctime)s] [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
     formatter = logging.Formatter(log_format, datefmt=date_format)
 
@@ -45,9 +46,9 @@ def confirm_action(message, default=True):
 
     while True:
         choice = input(prompt).strip().lower()
-        if choice in ['y', 'yes']:
+        if choice == 'y' or choice == 'yes' :
             return True
-        elif choice in ['n', 'no']:
+        elif choice == 'n' or choice == 'no':
             return False
         elif choice == '' and default:
           return True
@@ -64,5 +65,13 @@ def create_timestamp():
 def exception_handler(exc_type, exc_value, exc_traceback):
     """Handles unhandled exceptions and logs the error before exiting."""
     logger = logging.getLogger('riceautomator')
-    logger.error("An unhandled exception occurred:", exc_info=(exc_type, exc_value, exc_traceback))
+    
+    tb_list = traceback.extract_tb(exc_traceback)
+    last_call = tb_list[-1]
+    filename, lineno, function, code = last_call
+
+    logger.error("An unhandled exception occurred:")
+    logger.error(f"  Type: {exc_type.__name__}")
+    logger.error(f"  Value: {exc_value}")
+    logger.error(f"  File: {filename}, Line: {lineno}, Function: {function}")
     sys.exit(1)
