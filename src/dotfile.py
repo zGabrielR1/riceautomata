@@ -725,12 +725,47 @@ class DotfileManager:
         except Exception as e:
             raise FileOperationError(f"Failed to remove dotfiles from {target_dir}: {e}")
 
-    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}):
+
+    def plates(self, local_dir, dotfile_dirs, context, discover_templates = False):
+        """Applies all the templates with the correct context."""
+        for directory, category in dotfile_dirs.items():
+            dir_path = os.path.join(local_dir, directory)
+            if not os.path.exists(dir_path):
+                continue
+            for root, _, files in os.walk(dir_path):
+                 for item in files:
+                    item_path = os.path.join(root, item)
+                    if discover_templates and os.path.isfile(item_path) and item.endswith(".tpl"):
+                        template_content = self._process_template_file(item_path, context)
+                        if template_content:
+                            output_path = item_path.replace(".tpl", "")
+                            try:
+                                with open(output_path, 'w') as f:
+                                    f.write(template_content)
+                                    self.logger.debug(f"Template {item_path} processed and saved in {output_path}")
+                            except Exception as e:
+                                self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
+                    elif not discover_templates and os.path.isfile(item_path) and os.path.dirname(item_path) == dir_path:
+                         if item.endswith(".tpl"):
+                            template_content = self._process_template_file(item_path, context)
+                            if template_content:
+                                output_path = item_path.replace(".tpl", "")
+                                try:
+                                    with open(output_path, 'w') as f:
+                                        f.write(template_content)
+                                        self.logger.debug(f"Template {item_path} processed and saved in {output_path}")
+                                except Exception as e:
+                                   self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
+        return True
+        
+    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}, discover_templates = False):
         """Applies dotfiles from a repository using GNU Stow."""
         try:
             rice_config = self.config_manager.get_rice_config(repository_name)
             if not rice_config:
                 self.logger.error(f"No configuration found for repository: {repository_name}")
+                return False
+            if not self.plates(local_dir, dotfile_dirs, template_context, discover_templates):
                 return False
 
             local_dir = rice_config['local_directory']

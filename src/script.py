@@ -1,4 +1,4 @@
-# src/script.py
+# src/scripts.py
 import subprocess
 import os
 from src.utils import setup_logger
@@ -15,15 +15,15 @@ class ScriptRunner:
     def _run_command(self, command, cwd=None, check=True, env = None):
       """Runs a command and returns the result."""
       try:
+          if self.verbose:
+             self.logger.debug(f"Running command: {' '.join(command)}")
           result = subprocess.run(command, capture_output=True, text=True, check=check, cwd=cwd, env=env)
           if check and result.stderr:
               self.logger.error(f"Command failed: {' '.join(command)}")
               self.logger.error(f"Error:\n{result.stderr}")
               return False
-          if self.verbose:
-             self.logger.debug(f"Command ran successfully: {' '.join(command)}")
-             if result.stdout:
-              self.logger.debug(f"Output:\n{result.stdout}")
+          if self.verbose and result.stdout:
+              self.logger.debug(f"Output:\n{result.stdout.strip()}")
           return result
       except FileNotFoundError as e:
           self.logger.error(f"Command not found: {command[0]}: {e}")

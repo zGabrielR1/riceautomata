@@ -1,3 +1,4 @@
+# src/config.py
 from src.exceptions import ConfigurationError, ValidationError
 import json
 import os
@@ -10,43 +11,47 @@ DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
 DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
 
 # Configuration schema for validation
+PACKAGE_MANAGERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "preferred": {"type": ["string", "null"]},
+        "installed": {"type": "array", "items": {"type": "string"}},
+        "auto_install": {"type": "boolean"}
+    },
+    "required": ["preferred", "installed", "auto_install"]
+}
+RICE_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "repository_url": {"type": "string"},
+                "local_directory": {"type": "string"},
+                "profile": {"type": "string", "default": "default"},
+                "active_profile": {"type": "string", "default": "default"},
+                "profiles": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "dotfile_directories": {"type": "object"},
+                            "dependencies": {"type": "array"},
+                            "script_config": {"type": "object"},
+                            "custom_extras_paths": {"type": "object"}
+                        }
+                    }
+                }
+            },
+            "required": ["repository_url", "local_directory"]
+}
+
+
 CONFIG_SCHEMA = {
     "type": "object",
     "properties": {
-        "package_managers": {
-            "type": "object",
-            "properties": {
-                "preferred": {"type": ["string", "null"]},
-                "installed": {"type": "array", "items": {"type": "string"}},
-                "auto_install": {"type": "boolean"}
-            },
-            "required": ["preferred", "installed", "auto_install"]
-        },
+        "package_managers": PACKAGE_MANAGERS_SCHEMA,
         "rices": {
             "type": "object",
-            "additionalProperties": {
-                "type": "object",
-                "properties": {
-                    "repository_url": {"type": "string"},
-                    "local_directory": {"type": "string"},
-                    "profile": {"type": "string", "default": "default"},
-                    "active_profile": {"type": "string", "default": "default"},
-                    "profiles": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "object",
-                            "properties": {
-                                "dotfile_directories": {"type": "object"},
-                                "dependencies": {"type": "array"},
-                                "script_config": {"type": "object"},
-                                "custom_extras_paths": {"type": "object"}
-                            }
-                        }
-                    }
-                },
-                "required": ["repository_url", "local_directory"]
-            }
-        }
+            "additionalProperties": RICE_SCHEMA
+         }
     },
     "required": ["package_managers", "rices"]
 }
@@ -203,3 +208,10 @@ class ConfigManager:
             self.config_data['rices'][repository_name] = {}
         self.config_data['rices'][repository_name][key] = value
         self._save_config()
+
+    def _validate_config(self, config_data: Dict[str, Any]) -> None:
+        """Validates the configuration data against the schema."""
+        try:
+            jsonschema.validate(instance=config_data, schema=CONFIG_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise ValidationError(f"Configuration validation failed: {e.message}")

@@ -45,7 +45,9 @@ def main():
 
     # Apply dotfiles command
     apply_parser = subparsers.add_parser("apply", aliases=["-A"], help="Apply dotfiles from a local repository")
+    
     apply_parser.add_argument("repository_name", type=str, help="Name of the repository to apply")
+    apply_parser.add_argument("--discover-templates", action="store_true", help="Discover all templates recursively in all directories.")
     apply_parser.add_argument("--skip-packages", type=str, help="List of packages to be skipped, separated with commas")
     apply_parser.add_argument("--stow-options", type=str, help="Options for GNU Stow command, separated with spaces")
     apply_parser.add_argument("--target-packages", type=str, help="List of packages to install only the configs, separated with commas")
@@ -55,10 +57,12 @@ def main():
     apply_parser.add_argument("--template-context", type=str, help="Path to the json with template variables")
     apply_parser.add_argument("--custom-extras-paths", type=str, help="Path to the JSON with custom extras paths")
     apply_parser.add_argument("--profile", type=str, help="Profile to use for this operation")
+    
 
     # Manage dotfiles command
     manage_parser = subparsers.add_parser("manage", aliases=["-m"], help="Manage dotfiles, uninstalling the previous ones, and applying the new ones")
     manage_parser.add_argument("repository_name", type=str, help="Name of the repository to manage")
+    manage_parser.add_argument("--discover-templates", action="store_true", help="Discover all templates recursively in all directories.")
     manage_parser.add_argument("--stow-options", type=str, help="Options for GNU Stow command, separated with spaces")
     manage_parser.add_argument("--target-packages", type=str, help="List of packages to install only the configs, separated with commas")
     manage_parser.add_argument("--custom-paths", type=str, help="List of custom paths to be discovered as dotfiles, separated with commas")
@@ -165,8 +169,8 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
         else:
             template_context = {}
         if manage:
-            if not dotfile_manager.manage_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules, template_context):
-               sys.exit(1)
+            if not dotfile_manager.manage_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules, template_context, args.discover_templates):
+                sys.exit(1)
         else:
             if args.skip_packages:
                 skip_packages = args.skip_packages.split(",")
@@ -183,8 +187,8 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
             if args.overwrite_sym:
               overwrite_sym = args.overwrite_sym
             else: overwrite_sym = None
-            if not dotfile_manager.apply_dotfiles(args.repository_name, stow_options, package_manager, target_packages, overwrite_sym, custom_paths, args.ignore_rules, template_context):
-                sys.exit(1)
+            if not dotfile_manager.apply_dotfiles(args.repository_name, stow_options, package_manager, target_packages, overwrite_sym, custom_paths, args.ignore_rules, template_context, args.discover_templates):
+               sys.exit(1)
     except Exception as e:
         logger.error(f"An error occurred in command: {args.command}. Error: {e}")
         sys.exit(1)
