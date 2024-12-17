@@ -100,6 +100,7 @@ Clones a dotfiles repository with automatic error recovery and retry logic.
 - `--ignore-rules`: Ignore custom discovery rules
 - `--custom-paths <paths>`: Additional paths to process
 - `--custom-extras-paths <file.json>`: JSON file with extra paths mapping
+- `--profile <name>`: Use specific configuration profile
 
 #### Manage Dotfiles
 ```bash
@@ -119,15 +120,31 @@ Manages dotfiles with automatic backup and rollback support. Accepts the same op
 
 Creates a backup with automatic cleanup of old backups.
 
-### Configuration Profiles
+### Profile Management
 
-RiceAutomator now supports multiple configuration profiles:
+RiceAutomator supports multiple configuration profiles per repository. Each profile can have its own settings, paths, and configurations:
 
+#### List Profiles
 ```bash
-# Create a new profile
-./src/cli.py manage my-dotfiles --profile work
+./src/cli.py list-profiles <repository_name>
+```
+Shows all available profiles and indicates the currently active one.
 
-# Switch to a different profile
+#### Create Profile
+```bash
+./src/cli.py create-profile <repository_name> <profile_name>
+```
+Creates a new configuration profile.
+
+#### Switch Profile
+```bash
+./src/cli.py switch-profile <repository_name> <profile_name>
+```
+Switches to a different configuration profile.
+
+You can also specify a profile when applying or managing dotfiles:
+```bash
+./src/cli.py apply my-dotfiles --profile work
 ./src/cli.py manage my-dotfiles --profile home
 ```
 
@@ -136,6 +153,7 @@ Each profile can have its own:
 - Dependencies
 - Script configurations
 - Custom paths
+- Template variables
 
 ### Template Processing
 
@@ -172,10 +190,17 @@ Example `vars.json`:
    ./src/cli.py manage my-dotfiles --stow-options "--adopt" --custom-extras-paths extras.json
    ```
 
-4. **Clone and apply with verbose output:**
+4. **Profile management workflow:**
    ```bash
-   ./src/cli.py clone https://github.com/user/dotfiles.git -v
-   ./src/cli.py apply dotfiles --verbose
+   # List available profiles
+   ./src/cli.py list-profiles my-dotfiles
+   
+   # Create a new work profile
+   ./src/cli.py create-profile my-dotfiles work
+   
+   # Switch to work profile and apply
+   ./src/cli.py switch-profile my-dotfiles work
+   ./src/cli.py apply my-dotfiles
    ```
 
 ## Error Handling
