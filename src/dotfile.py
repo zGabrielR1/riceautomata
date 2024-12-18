@@ -1356,16 +1356,31 @@ class ConfigManager:
         self.config_dir = os.path.join(os.path.expanduser("~"), ".config", "rice-automata")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.config_data = {}
+        self.logger = setup_logger()
 
         if not os.path.exists(self.config_dir):
-            os.makedirs(self.config_dir, exist_ok=True)
+            try:
+                os.makedirs(self.config_dir, exist_ok=True)
+                self.logger.info(f"Created configuration directory at {self.config_dir}")
+            except Exception as e:
+                self.logger.error(f"Failed to create config directory: {e}")
+                raise ConfigurationError(f"Could not create config directory: {e}")
 
         if not os.path.exists(self.config_file):
-            with open(self.config_file, 'w') as f:
-                json.dump({}, f)
+            try:
+                with open(self.config_file, 'w') as f:
+                    json.dump({}, f)
+                self.logger.info(f"Created configuration file at {self.config_file}")
+            except Exception as e:
+                self.logger.error(f"Failed to create config file: {e}")
+                raise ConfigurationError(f"Could not create config file: {e}")
 
-        with open(self.config_file, 'r') as f:
-            self.config_data = json.load(f)
+        try:
+            with open(self.config_file, 'r') as f:
+                self.config_data = json.load(f)
+        except Exception as e:
+            self.logger.error(f"Failed to load config file: {e}")
+            raise ConfigurationError(f"Could not load config file: {e}")
 
     def get_rice_config(self, repository_name):
         """Retrieve the configuration for a given rice repository."""
