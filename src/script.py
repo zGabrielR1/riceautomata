@@ -15,18 +15,22 @@ class ScriptRunner:
     def _run_command(self, command, cwd=None, check=True, env = None):
       """Runs a command and returns the result."""
       try:
-          if self.verbose:
-             self.logger.debug(f"Running command: {' '.join(command)}")
+          self.logger.debug(f"Running command: {' '.join(command)}")  # Log the command being run
           result = subprocess.run(command, capture_output=True, text=True, check=check, cwd=cwd, env=env)
+          
           if check and result.stderr:
               self.logger.error(f"Command failed: {' '.join(command)}")
               self.logger.error(f"Error:\n{result.stderr}")
               return False
-          if self.verbose and result.stdout:
-              self.logger.debug(f"Output:\n{result.stdout.strip()}")
+          
+          if self.verbose:
+              self.logger.debug(f"Command ran successfully: {' '.join(command)}")
+              if result.stdout:
+                  self.logger.debug(f"Output:\n{result.stdout}")
+          
           return result
       except FileNotFoundError as e:
-          self.logger.error(f"Command not found: {command[0]}: {e}")
+          self.logger.error(f"Command not found. Make sure {command[0]} is installed: {e}")
           return False
       except Exception as e:
          self.logger.error(f"Error executing command: {' '.join(command)}. Error: {e}")

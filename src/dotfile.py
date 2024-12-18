@@ -169,14 +169,17 @@ class DotfileManager:
             
             if os.path.exists(local_dir):
                 raise GitOperationError(f"Repository already exists at {local_dir}")
-            
+
             # Start backup operation
             backup_id = self.backup_manager.start_operation_backup("clone_repository")
             
             self.logger.info(f"Cloning repository into {local_dir}")
+            
+            # Define the clone operation
             def clone_op():
                 return self.script_runner._run_command(["git", "clone", repository_url, local_dir])
             
+            # Attempt to clone the repository with retries
             clone_result = self._retry_operation(clone_op)
 
             if clone_result:
@@ -211,8 +214,8 @@ class DotfileManager:
                 self.config_manager.add_rice_config(repo_name, config)
                 return True
             else:
-                raise GitOperationError(f"Failed to clone repository: {repository_url}")
-
+                self.logger.error("Failed to clone repository.")
+                return False
         except Exception as e:
             self.logger.error(f"Error during repository cloning: {e}")
             if backup_id:
@@ -1333,7 +1336,7 @@ class DotfileManager:
             subprocess.run(['nix', '--version'], capture_output=True)
             return True
         except FileNotFoundError:
-            self.logger.info("Nix is required but not installed. Installing Nix...")
+            self.logger.info("Nix is required, and not installed. Installing Nix...")
             try:
                 # Add Nix installation logic here
                 return True
