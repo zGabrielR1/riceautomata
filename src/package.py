@@ -776,4 +776,3 @@ class PackageManager:
             else:
                 self.logger.error(f"Unsupported package manager: {pm}")
                 return False
-```
