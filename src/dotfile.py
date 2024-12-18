@@ -904,122 +904,113 @@ class DotfileManager:
         except Exception as e:
             raise FileOperationError(f"Failed to discover scripts in {local_dir}: {e}")
     
-    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}, discover_templates = False, custom_scripts = None):
+    def apply_dotfiles(self, repository_name, stow_options=[], package_manager=None, target_packages=None, overwrite_symlink=None, custom_paths=None, ignore_rules=False, template_context={}, discover_templates=False, custom_scripts=None):
         """Applies dotfiles from a repository using GNU Stow."""
         try:
             rice_config = self.config_manager.get_rice_config(repository_name)
             if not rice_config:
                 self.logger.error(f"No configuration found for repository: {repository_name}")
                 return False
-            if not self.plates(local_dir, dotfile_dirs, template_context, discover_templates):
+            
+            local_dir = rice_config['local_directory']
+            
+            if not self.plates(local_dir, rice_config.get('dotfile_directories', {}), template_context, discover_templates):
                 return False
 
-            local_dir = rice_config['local_directory']
             nix_config = self._check_nix_config(local_dir)
             rice_config['nix_config'] = nix_config
             self.config_manager.add_rice_config(repository_name, rice_config)
             
-            # Discover scripts
             script_config = self._discover_scripts(local_dir, custom_scripts)
             rice_config['script_config'].update(script_config)
             self.config_manager.add_rice_config(repository_name, rice_config)
             
-            # Execute pre clone scripts
             env = os.environ.copy()
             env['RICE_DIRECTORY'] = local_dir
             if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
-              return False
+                return False
 
             if nix_config:
-              if not self._apply_nix_config(local_dir, package_manager):
-                return False
-              rice_config['applied'] = True
-              self.config_manager.add_rice_config(repository_name, rice_config)
-              self.logger.info("Nix configuration applied sucessfully")
-              return True
+                if not self._apply_nix_config(local_dir, package_manager):
+                    return False
+                rice_config['applied'] = True
+                self.config_manager.add_rice_config(repository_name, rice_config)
+                self.logger.info("Nix configuration applied successfully")
+                return True
+
             if target_packages:
-              if not isinstance(target_packages, list):
-                target_packages = [target_packages]
-              
-              # Minor Change to correctly print rice name when target packages are defined.
-              if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
-                self.logger.info(f"Applying dots for: {target_packages[0]}") # Added the index [0] to show the right name of the rice.
-              else:
-                self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
+                if not isinstance(target_packages, list):
+                    target_packages = [target_packages]
+                
+                if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
+                    self.logger.info(f"Applying dots for: {target_packages[0]}")
+                else:
+                    self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
             
-            # Execute post clone scripts
             if not self.script_runner.run_scripts_by_phase(local_dir, 'post_clone', rice_config.get('script_config'), env):
                 return False
 
             dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
             if not dotfile_dirs:
-               self.logger.warning("No dotfile directories found. Aborting")
-               return False
-            # Check for multiple rices (top-level directories)
+                self.logger.warning("No dotfile directories found. Aborting")
+                return False
+
             top_level_dirs = [os.path.basename(dir) for dir in dotfile_dirs if not os.path.dirname(dir)]
             if len(top_level_dirs) > 1 and not target_packages:
-               chosen_rice = self._prompt_multiple_rices(top_level_dirs)
-               if not chosen_rice:
-                  self.logger.warning("Installation aborted.")
-                  return False
-               # Filter out all the other directories that aren't this one
-               dotfile_dirs = {dir: category for dir, category in dotfile_dirs.items() if os.path.basename(dir).startswith(chosen_rice)}
-               if not dotfile_dirs:
-                self.logger.error("No dotfiles were found with the specified rice name.")
-                return False
+                chosen_rice = self._prompt_multiple_rices(top_level_dirs)
+                if not chosen_rice:
+                    self.logger.warning("Installation aborted.")
+                    return False
+                dotfile_dirs = {dir: category for dir, category in dotfile_dirs.items() if os.path.basename(dir).startswith(chosen_rice)}
+                if not dotfile_dirs:
+                    self.logger.error("No dotfiles were found with the specified rice name.")
+                    return False
 
             rice_config['dotfile_directories'] = dotfile_dirs
             dependencies = self._discover_dependencies(local_dir, dotfile_dirs)
             rice_config['dependencies'] = dependencies
             self.config_manager.add_rice_config(repository_name, rice_config)
             
-            # Install fonts before applying anything
-            if self._check_nix_config(local_dir) == False: # Do not install fonts if it's a nixos configuration.
+            if not self._check_nix_config(local_dir):
                 if not self._install_fonts(local_dir, package_manager):
-                   return False
+                    return False
             
-            # Execute pre install dependencies scripts
             if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_install_dependencies', rice_config.get('script_config'), env):
                 return False
                 
-            # Install packages
-            if not package_manager.install(dependencies, local_dir = local_dir):
+            if not package_manager.install(dependencies, local_dir=local_dir):
                 return False
 
-            # Execute post install dependencies scripts
             if not self.script_runner.run_scripts_by_phase(local_dir, 'post_install_dependencies', rice_config.get('script_config'), env):
                 return False
 
-            # Execute pre apply scripts
             if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_apply', rice_config.get('script_config'), env):
                 return False
 
-            #Apply templates
             self._apply_templates(local_dir, template_context)
 
             applied_all = True
             for directory, category in dotfile_dirs.items():
                 dir_path = os.path.join(local_dir, directory)
                 if not os.path.exists(dir_path):
-                  self.logger.warning(f"Could not find directory {dir_path}")
-                  continue
+                    self.logger.warning(f"Could not find directory {dir_path}")
+                    continue
                 if category == "config":
-                  if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
-                    applied_all = False
+                    if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
+                        applied_all = False
                 elif category == "cache":
                     if not self._apply_cache_directory(local_dir, directory, stow_options, overwrite_symlink):
-                      applied_all = False
+                        applied_all = False
                 elif category == "local":
                     if not self._apply_local_directory(local_dir, directory, stow_options, overwrite_symlink):
                         applied_all = False
                 elif category == "script":
-                    if not self._apply_other_directory(local_dir, directory): # Bin folders and other scripts
-                         applied_all = False
-                else: # wallpaper, scripts, icons, etc.
-                   if not self._apply_other_directory(local_dir, directory):
-                      applied_all = False
+                    if not self._apply_other_directory(local_dir, directory):
+                        applied_all = False
+                else:
+                    if not self._apply_other_directory(local_dir, directory):
+                        applied_all = False
             
-            # Apply custom extras folders
             custom_extras_paths = self.config_manager.get_rice_config(repository_name).get('custom_extras_paths')
             if custom_extras_paths:
                 self._apply_custom_extras_directories(local_dir, custom_extras_paths)
@@ -1031,9 +1022,8 @@ class DotfileManager:
                     item_path = os.path.join(extras_dir, item)
                     if os.path.isdir(item_path):
                         if not self._apply_extra_directory(local_dir, item_path):
-                           applied_all = False
+                            applied_all = False
 
-            # Execute post apply scripts
             if not self.script_runner.run_scripts_by_phase(local_dir, 'post_apply', rice_config.get('script_config'), env):
                 return False
 
@@ -1043,8 +1033,8 @@ class DotfileManager:
                 self.config_manager.add_rice_config(repository_name, rice_config)
                 return True
             else:
-               self.logger.error(f"Failed to apply all dotfiles")
-               return False
+                self.logger.error(f"Failed to apply all dotfiles")
+                return False
         except Exception as e:
             self.logger.error(f"An error occurred while applying dotfiles: {e}")
             return False
