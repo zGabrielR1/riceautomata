@@ -903,7 +903,7 @@ class DotfileManager:
             for directory, category in dotfile_dirs.items():
                 dir_path = os.path.join(local_dir, directory)
                 if not os.path.exists(dir_path):
-                  self.logger.warning(f"Could not find directory: {dir_path}")
+                  self.logger.warning(f"Could not find directory {dir_path}")
                   continue
                 if category == "config":
                   if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
@@ -1192,3 +1192,49 @@ class DotfileManager:
         """Manage different profiles or environments."""
         # Implement profile management logic
         pass
+
+class ConfigManager:
+    def __init__(self):
+        self.config_dir = os.path.join(os.path.expanduser("~"), ".config", "rice-automata")
+        self.config_file = os.path.join(self.config_dir, "config.json")
+        self.config_data = {}
+
+        if not os.path.exists(self.config_dir):
+            os.makedirs(self.config_dir, exist_ok=True)
+
+        if not os.path.exists(self.config_file):
+            with open(self.config_file, 'w') as f:
+                json.dump({}, f)
+
+        with open(self.config_file, 'r') as f:
+            self.config_data = json.load(f)
+
+    def get_rice_config(self, repository_name):
+        """Retrieve the configuration for a given rice repository."""
+        config_path = os.path.join(self.config_dir, repository_name, 'rice_config.json')
+        self.logger.debug(f"Looking for configuration at: {config_path}")
+
+        if not os.path.exists(config_path):
+            self.logger.error(f"Configuration file not found for repository: {repository_name}")
+            return None
+
+        try:
+            with open(config_path, 'r') as config_file:
+                config = json.load(config_file)
+                self.logger.debug(f"Loaded configuration for {repository_name}: {config}")
+                return config
+        except Exception as e:
+            self.logger.error(f"Error reading configuration file for {repository_name}: {e}")
+            return None
+
+    def add_rice_config(self, repository_name, config):
+        """Add or update the configuration for a given rice repository."""
+        config_path = os.path.join(self.config_dir, repository_name, 'rice_config.json')
+        self.logger.debug(f"Updating configuration at: {config_path}")
+
+        try:
+            with open(config_path, 'w') as config_file:
+                json.dump(config, config_file, indent=4)
+                self.logger.debug(f"Updated configuration for {repository_name}: {config}")
+        except Exception as e:
+            self.logger.error(f"Error updating configuration file for {repository_name}: {e}")

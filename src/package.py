@@ -496,40 +496,21 @@ class PackageManager:
       
       self.package_managers['system'] = self.system_package_manager # Update system manager on dict.
 
-    def _process_package_lists(self, local_dir):
-        """Process all package list files in the repository."""
-        package_lists = {
-            '.install_pkg.lst': self._install_packages,
-            '.install_pkg_base.lst': self._install_packages,
-            '.install_flatpack.lst': self._install_flatpak_packages
-        }
-        
-        for list_file, install_func in package_lists.items():
-            list_path = os.path.join(local_dir, list_file)
-            if os.path.exists(list_path):
-                try:
-                    with open(list_path, 'r') as f:
-                        packages = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-                        if packages:
-                            install_func(packages)
-                except Exception as e:
-                    self.logger.error(f"Error processing package list {list_file}: {e}")
-                    return False
-        return True
-
-    def _install_flatpak_packages(self, packages):
-        """Install packages using flatpak."""
-        try:
-            for package in packages:
-                result = subprocess.run(['flatpak', 'install', '-y', package],
-                                     capture_output=True, text=True)
-                if result.returncode != 0:
-                    self.logger.error(f"Failed to install flatpak package {package}: {result.stderr}")
-                    return False
-            return True
-        except Exception as e:
-            self.logger.error(f"Error installing flatpak packages: {e}")
-            return False
+    def _detect_package_manager(self):
+        """Detects the system package manager based on the OS."""
+        if os.path.exists("/etc/os-release"):
+            with open("/etc/os-release", "r") as f:
+                os_release_content = f.read()
+                if "ID=arch" in os_release_content:
+                    return "pacman"
+                elif "ID=ubuntu" in os_release_content or "ID=debian" in os_release_content:
+                    return "apt"
+                elif "ID=fedora" in os_release_content:
+                    return "dnf"
+                elif "ID=opensuse-tumbleweed" in os_release_content:
+                    return "zypper"
+        self.logger.warning("Could not detect package manager, defaulting to pacman")
+        return "pacman"
 
     def install_package(self, package_spec):
         """Installs a package using the appropriate package manager."""
@@ -743,19 +724,3 @@ class PackageManager:
             else:
                 self.logger.error(f"Unsupported package manager: {pm}")
                 return False
-
-    def _detect_package_manager(self):
-        """Detects the system package manager based on the OS."""
-        if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release", "r") as f:
-                os_release_content = f.read()
-                if "ID=arch" in os_release_content:
-                    return "pacman"
-                elif "ID=ubuntu" in os_release_content or "ID=debian" in os_release_content:
-                    return "apt"
-                elif "ID=fedora" in os_release_content:
-                    return "dnf"
-                elif "ID=opensuse-tumbleweed" in os_release_content:
-                    return "zypper"
-        self.logger.warning("Could not detect package manager, defaulting to pacman")
-        return "pacman"
