@@ -632,7 +632,27 @@ class PackageManager:
                  if not self.package_managers[pm].install([package.split(":",1)[1]], local_dir):
                     return False
           return True
-    
+
+    def _run_command(self, command, check=True):
+        """Runs a command and returns the result."""
+        try:
+          result = subprocess.run(command, capture_output=True, text=True, check=check)
+          if check and result.stderr:
+              self.logger.error(f"Command failed: {' '.join(command)}")
+              self.logger.error(f"Error:\n{result.stderr}")
+              return False
+          if self.verbose:
+              self.logger.debug(f"Command ran successfully: {' '.join(command)}")
+              if result.stdout:
+                self.logger.debug(f"Output:\n{result.stdout}")
+          return result
+        except FileNotFoundError as e:
+          self.logger.error(f"Command not found. Make sure {command[0]} is installed: {e}")
+          return False
+        except Exception as e:
+          self.logger.error(f"Error executing command: {' '.join(command)}. Error: {e}")
+          return False
+
     def _check_nix(self):
         """Checks if Nix is installed."""
         nix_result = self._run_command(["nix", "--version"], check=False)
