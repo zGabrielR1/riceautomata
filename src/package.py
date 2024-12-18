@@ -266,7 +266,7 @@ class ZypperPackageManager(PackageManagerInterface):
       except FileNotFoundError as e:
           self.logger.error(f"Command not found. Make sure {command[0]} is installed: {e}")
           return False
-      except Exception as e:
+        except Exception as e:
         self.logger.error(f"Error executing command: {' '.join(command)}. Error: {e}")
         return False
   
@@ -655,8 +655,20 @@ class PackageManager:
 
     def _check_nix(self):
         """Checks if Nix is installed."""
-        nix_result = self._run_command(["nix", "--version"], check=False)
-        return nix_result and nix_result.returncode == 0
+        try:
+            result = self._run_command(["nix", "--version"])
+            if result and result.returncode == 0:
+                self.nix_installed = True
+                return True
+            return False
+        except FileNotFoundError:
+            self.logger.warning("Nix is not installed. Nix-related operations will be skipped.")
+            self.nix_installed = False
+            return False
+        except Exception as e:
+            self.logger.error(f"Error checking Nix installation: {e}")
+            self.nix_installed = False
+            return False
 
     def _install_nix(self):
         """Attempts to install nix using the install script."""

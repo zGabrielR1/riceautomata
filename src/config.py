@@ -62,6 +62,7 @@ class ConfigManager:
         self.config_dir = sanitize_path(config_dir)
         self.config_file = sanitize_path(config_file)
         self.config_data = {}
+        self.logger = setup_logger()  # Initialize logger
         self._ensure_config_dir()
         self._load_config()
 
