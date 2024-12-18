@@ -85,11 +85,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Initialize logger immediately after parsing arguments
+    logger = setup_logger(args.verbose)
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
-
-    logger = setup_logger(args.verbose)
+        
     package_manager = PackageManager(args.verbose, args.aur_helper)
     dotfile_manager = DotfileManager(args.verbose)
 
