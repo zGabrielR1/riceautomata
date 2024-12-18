@@ -1388,8 +1388,9 @@ class ConfigManager:
         self.logger.debug(f"Looking for configuration at: {config_path}")
 
         if not os.path.exists(config_path):
-            self.logger.error(f"Configuration file not found for repository: {repository_name}")
-            return None
+            # If config doesn't exist, try to generate one from the repository structure
+            self.logger.info(f"No existing configuration found for {repository_name}, generating from structure...")
+            return self._generate_config_from_structure(repository_name)
 
         try:
             with open(config_path, 'r') as config_file:
@@ -1398,6 +1399,74 @@ class ConfigManager:
                 return config
         except Exception as e:
             self.logger.error(f"Error reading configuration file for {repository_name}: {e}")
+            return None
+
+    def _generate_config_from_structure(self, repository_name):
+        """Generate a configuration based on the repository structure."""
+        repo_path = os.path.expanduser(repository_name)
+        if not os.path.exists(repo_path):
+            self.logger.error(f"Repository path does not exist: {repo_path}")
+            return None
+
+        config = {
+            "name": os.path.basename(repo_path),
+            "dotfile_dirs": [],
+            "dependencies": [],
+            "scripts": []
+        }
+
+        # Check for common configuration directories
+        if os.path.exists(os.path.join(repo_path, "config")):
+            config["dotfile_dirs"].append({
+                "path": "config",
+                "type": "config",
+                "stow_target": "~/.config"
+            })
+
+        # Check for install scripts
+        for script_name in ["install", "install.sh", "install.conf.yaml", "install.conf"]:
+            if os.path.exists(os.path.join(repo_path, script_name)):
+                config["scripts"].append(script_name)
+
+        # Check for post-install scripts
+        if os.path.exists(os.path.join(repo_path, "post-install")):
+            for root, _, files in os.walk(os.path.join(repo_path, "post-install")):
+                for file in files:
+                    if os.access(os.path.join(root, file), os.X_OK):
+                        config["scripts"].append(os.path.join("post-install", file))
+
+        # Try to detect dependencies from various config files
+        dependency_files = [
+            "install.conf.yaml",
+            "requirements.txt",
+            "package.json",
+            "Cargo.toml"
+        ]
+
+        for dep_file in dependency_files:
+            dep_path = os.path.join(repo_path, dep_file)
+            if os.path.exists(dep_path):
+                try:
+                    with open(dep_path, 'r') as f:
+                        content = f.read().lower()
+                        # Basic dependency detection - can be improved
+                        deps = re.findall(r'(?:depends?(?:_?on)?|requires?|packages?)\s*:?\s*([\w-]+)', content)
+                        config["dependencies"].extend(deps)
+                except Exception as e:
+                    self.logger.warning(f"Error reading dependency file {dep_file}: {e}")
+
+        # Save the generated config
+        config_dir = os.path.join(self.config_dir, repository_name)
+        os.makedirs(config_dir, exist_ok=True)
+        
+        config_path = os.path.join(config_dir, 'rice_config.json')
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=4)
+            self.logger.info(f"Generated and saved configuration for {repository_name}")
+            return config
+        except Exception as e:
+            self.logger.error(f"Error saving generated configuration: {e}")
             return None
 
     def add_rice_config(self, repository_name, config):
