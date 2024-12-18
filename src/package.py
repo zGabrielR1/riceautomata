@@ -266,7 +266,7 @@ class ZypperPackageManager(PackageManagerInterface):
       except FileNotFoundError as e:
           self.logger.error(f"Command not found. Make sure {command[0]} is installed: {e}")
           return False
-        except Exception as e:
+      except Exception as e:
         self.logger.error(f"Error executing command: {' '.join(command)}. Error: {e}")
         return False
   
