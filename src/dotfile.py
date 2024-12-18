@@ -35,6 +35,12 @@ class DotfileManager:
         self.template_env = Environment(loader=FileSystemLoader('/'))
         self.max_retries = 3
         self.retry_delay = 2  # seconds
+        self.dotfile_dependencies = {
+            'dotfile1': ['package1', 'package2'],
+            'dotfile2': ['package3'],
+            'dotfile3': ['package1', 'package4'],
+            # Add more dotfiles and their dependencies here
+        }
 
     def _ensure_managed_dir(self):
         """Create managed rices directory if it does not exist."""
@@ -902,6 +908,22 @@ class DotfileManager:
         except Exception as e:
             self.logger.error(f"An error occurred while applying dotfiles: {e}")
             return False
+
+    def _check_installed_packages(self, packages):
+        """Checks if the specified packages are installed."""
+        installed = []
+        for package in packages:
+            if self.package_manager.is_installed(package):
+                installed.append(package)
+        return installed
+
+    def _install_missing_packages(self, packages):
+        """Installs any missing packages from the list."""
+        missing_packages = [pkg for pkg in packages if pkg not in self._check_installed_packages(packages)]
+        if missing_packages:
+            self.logger.info(f"Installing missing packages: {', '.join(missing_packages)}")
+            return self.package_manager.install(missing_packages, None)
+        return True
 
     def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, custom_paths = None, ignore_rules = False, template_context = {}):
          """Manages the dotfiles, uninstalling the previous rice, and applying the new one."""
