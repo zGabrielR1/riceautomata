@@ -41,6 +41,16 @@ RiceAutomator is a powerful, flexible, and intelligent command-line tool designe
   - Custom stow options
   - Profile-based configurations
 
+## Nix Rice Installation
+
+RiceAutomator now supports the installation of Nix rices. This feature works as follows:
+
+- **Non-NixOS Systems**: If Nix is not installed, the system will skip the installation of Nix rices without generating an error. Users are encouraged to install Nix if they wish to use Nix rices.
+
+- **NixOS Systems**: The application will automatically detect and install Nix rices if Nix is available, providing seamless integration with the existing system configuration.
+
+To install a Nix rice, simply include it in your repository's configuration. The application will handle the rest, ensuring compatibility and proper installation based on your system's capabilities.
+
 ## Installation
 
 1. **Clone the repository:**

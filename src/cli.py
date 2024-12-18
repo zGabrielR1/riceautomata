@@ -133,6 +133,8 @@ def main():
                     sys.exit(1)
             if args.profile:
                 dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
+            if not _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
+                sys.exit(1)
             _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=True)
 
         elif args.command == "backup":
@@ -142,10 +144,34 @@ def main():
         elif args.command == "apply":
             if args.profile:
                 dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
+            if not _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
+                sys.exit(1)
             _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)
+
+def _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
+    """Handles the installation of Nix rices."""
+    try:
+        rice_config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+        if not rice_config:
+            logger.error(f"No configuration found for repository: {args.repository_name}")
+            return False
+
+        if 'nix' in rice_config.get('dependencies', []):
+            if not package_manager._check_nix():
+                logger.info("Nix is not installed. Skipping Nix rice installation.")
+                return True
+
+            logger.info("Installing Nix rice...")
+            # Implement logic to install Nix rice here
+            # Example: package_manager.install_nix_rice(rice_config)
+            return True
+
+    except Exception as e:
+        logger.error(f"An error occurred during Nix rice installation: {e}")
+        return False
 
 def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger, manage: bool = False) -> None:
     """Handles both the apply and manage commands, reducing code duplication."""
