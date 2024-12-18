@@ -19,6 +19,103 @@ import time
 
 logger = setup_logger()
 
+class DotfileNode:
+    def __init__(self, path: str, is_dotfile: bool = False):
+        self.path = path
+        self.name = os.path.basename(path)
+        self.is_dotfile = is_dotfile
+        self.children = []
+        self.dependencies = set()
+        self.is_nix_config = False
+
+class DotfileTree:
+    def __init__(self):
+        self.root = None
+        self.dotfile_patterns = [
+            r'^\.',  # Traditional dot files
+            r'^dot_',  # Chezmoi style
+            r'\.conf$',  # Configuration files
+            r'\.toml$',
+            r'\.yaml$',
+            r'\.yml$',
+            r'\.json$',
+            r'rc$',  # rc files
+            r'config$',  # config files
+            r'\.nix$',  # Nix configuration files
+            r'flake\.nix$'  # Nix flakes
+        ]
+        self.known_config_dirs = {
+            'nvim', 'alacritty', 'hypr', 'waybar', 'sway', 'i3',
+            'polybar', 'kitty', 'rofi', 'dunst', 'picom', 'gtk-3.0',
+            'gtk-4.0', 'zsh', 'bash', 'fish', 'tmux', 'neofetch',
+            'fastfetch', 'eww', 'wezterm'
+        }
+
+    def build_tree(self, root_path: str) -> DotfileNode:
+        """Build a tree structure of the dotfiles directory"""
+        root = DotfileNode(root_path)
+        self.root = root
+        self._build_tree_recursive(root)
+        return root
+
+    def _is_dotfile(self, path: str) -> bool:
+        """Check if a file or directory is a dotfile/config"""
+        name = os.path.basename(path)
+        
+        # Check if it's a known config directory
+        if os.path.isdir(path) and name.lower() in self.known_config_dirs:
+            return True
+
+        # Check against patterns
+        for pattern in self.dotfile_patterns:
+            if re.search(pattern, name):
+                return True
+
+        return False
+
+    def _build_tree_recursive(self, node: DotfileNode):
+        """Recursively build the tree structure"""
+        try:
+            items = os.listdir(node.path)
+            for item in items:
+                full_path = os.path.join(node.path, item)
+                is_dotfile = self._is_dotfile(full_path)
+                child_node = DotfileNode(full_path, is_dotfile)
+                
+                # Check for Nix configurations
+                if item.endswith('.nix') or item == 'flake.nix':
+                    child_node.is_nix_config = True
+                    
+                if os.path.isdir(full_path):
+                    self._build_tree_recursive(child_node)
+                
+                node.children.append(child_node)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Could not access {node.path}: {e}")
+
+    def find_dependencies(self, node: DotfileNode):
+        """Find dependencies in configuration files"""
+        if os.path.isfile(node.path):
+            try:
+                with open(node.path, 'r', encoding='utf-8') as f:
+                    content = f.read().lower()
+                    # Look for common dependency indicators
+                    if 'requires' in content or 'depends' in content or 'dependencies' in content:
+                        # Extract potential package names
+                        packages = set()
+                        lines = content.split('\n')
+                        for line in lines:
+                            if any(indicator in line for indicator in ['requires', 'depends', 'dependencies']):
+                                # Extract package names using various patterns
+                                potential_packages = re.findall(r'[\w-]+(?:>=?[\d.]+)?', line)
+                                packages.update(potential_packages)
+                        node.dependencies.update(packages)
+            except Exception as e:
+                logger.warning(f"Could not analyze dependencies in {node.path}: {e}")
+
+        for child in node.children:
+            self.find_dependencies(child)
+
 class DotfileManager:
 
     def __init__(self, verbose=False):
@@ -41,6 +138,7 @@ class DotfileManager:
             'dotfile3': ['package1', 'package4'],
             # Add more dotfiles and their dependencies here
         }
+        self.dotfile_tree = DotfileTree()
 
     def _ensure_managed_dir(self):
         """Create managed rices directory if it does not exist."""
@@ -1192,6 +1290,66 @@ class DotfileManager:
         """Manage different profiles or environments."""
         # Implement profile management logic
         pass
+
+    def analyze_rice_directory(self, rice_path: str) -> Dict[str, Any]:
+        """Analyze a rice directory and return its structure and requirements"""
+        tree = self.dotfile_tree.build_tree(rice_path)
+        self.dotfile_tree.find_dependencies(tree)
+        
+        # Collect all dotfiles and their dependencies
+        dotfiles = []
+        nix_configs = []
+        all_dependencies = set()
+        
+        def traverse(node):
+            if node.is_dotfile:
+                dotfiles.append(node.path)
+                all_dependencies.update(node.dependencies)
+            if node.is_nix_config:
+                nix_configs.append(node.path)
+            for child in node.children:
+                traverse(child)
+        
+        traverse(tree)
+        
+        return {
+            'dotfiles': dotfiles,
+            'dependencies': list(all_dependencies),
+            'has_nix': bool(nix_configs),
+            'nix_configs': nix_configs
+        }
+
+    def detect_rice_variants(self, rice_path: str) -> List[str]:
+        """Detect if the rice directory contains multiple rice variants"""
+        variants = []
+        
+        # Check common patterns for rice variants
+        for item in os.listdir(rice_path):
+            full_path = os.path.join(rice_path, item)
+            if os.path.isdir(full_path):
+                # Check if directory contains dotfiles
+                analysis = self.analyze_rice_directory(full_path)
+                if analysis['dotfiles']:
+                    variants.append(item)
+        
+        return variants
+
+    def install_nix_if_needed(self, rice_analysis: Dict[str, Any]) -> bool:
+        """Install Nix if the rice requires it and it's not installed"""
+        if not rice_analysis['has_nix']:
+            return True
+
+        try:
+            subprocess.run(['nix', '--version'], capture_output=True)
+            return True
+        except FileNotFoundError:
+            self.logger.info("Nix is required but not installed. Installing Nix...")
+            try:
+                # Add Nix installation logic here
+                return True
+            except Exception as e:
+                self.logger.error(f"Failed to install Nix: {e}")
+                return False
 
 class ConfigManager:
     def __init__(self):
