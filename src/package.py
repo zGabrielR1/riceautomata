@@ -562,7 +562,22 @@ class PackageManager:
     def _install_aur_package(self, package):
        return self.package_managers.get('pacman').install([f"aur:{package}"], None)
     
-    def install(self, packages, local_dir = None):
+    def _install_from_list(self, list_path):
+      """Installs packages from the specified list file."""
+      if not os.path.exists(list_path):
+        self.logger.error(f"List file not found {list_path}")
+        return False
+      try:
+         with open(list_path, "r") as file:
+              packages = [line.strip() for line in file if line.strip() and not line.startswith("#")]
+              if packages:
+                   if not self.install(packages):
+                     return False
+      except Exception as e:
+          self.logger.error(f"Error reading the list of packages on file: {list_path}. Error: {e}")
+          return False
+      return True
+    def install(self, packages, use_paru = True, local_dir = None):
         """Installs the list of packages using the package manager, with user confirmation."""
         if packages:
             if self.verbose:
@@ -575,7 +590,21 @@ class PackageManager:
                   if not self._install_packages(packages, local_dir):
                     return False
                   return True
+        if local_dir:
+           pkg_list = os.path.join(local_dir, ".install_pkg.lst")
+           pkg_base_list = os.path.join(local_dir, ".install_pkg_base.lst")
+           flatpack_list = os.path.join(local_dir, ".install_flatpack.lst")
+           if os.path.exists(pkg_list):
+              if not self._install_from_list(pkg_list):
+                return False
+           if os.path.exists(pkg_base_list):
+              if not self._install_from_list(pkg_base_list):
+                return False
+           if os.path.exists(flatpack_list):
+                if not self._install_from_list(flatpack_list):
+                    return False
         return True
+
     
     def _install_packages(self, packages, local_dir = None):
         """Installs a list of packages using the package manager."""

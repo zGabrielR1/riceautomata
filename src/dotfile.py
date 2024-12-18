@@ -295,9 +295,17 @@ class DotfileManager:
         dotfile_dirs = {}
         if custom_paths: # If the user is using a custom folder
             for path in custom_paths:
-                if os.path.exists(os.path.join(local_dir, path)):
-                    category = self._categorize_dotfile_directory(os.path.join(local_dir, path))
-                    dotfile_dirs[path] = category
+                full_path = os.path.join(local_dir, path)
+                if os.path.exists(full_path):
+                    if os.path.isdir(full_path):
+                        for root, _, files in os.walk(full_path):
+                             for item in files:
+                                item_path = os.path.join(root, item)
+                                category = self._categorize_dotfile_directory(item_path)
+                                dotfile_dirs[os.path.relpath(item_path, local_dir)] = category
+                    elif os.path.isfile(full_path):
+                        category = self._categorize_dotfile_directory(full_path)
+                        dotfile_dirs[path] = category
                 else:
                     self.logger.warning(f"Could not find custom path: {path}")
             return dotfile_dirs
@@ -763,8 +771,42 @@ class DotfileManager:
                                 except Exception as e:
                                    self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
         return True
-        
-    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}, discover_templates = False):
+
+
+    def _discover_scripts(self, local_dir: str, custom_scripts = None) -> Dict[str, List[str]]:
+        """Discovers executable files inside a "scriptdata" directory."""
+        try:
+            script_phases = {
+                "pre_clone": [], "post_clone": [],
+                "pre_install_dependencies": [], "post_install_dependencies": [],
+                "pre_apply": [], "post_apply": [],
+                "pre_uninstall": [], "post_uninstall": []
+            }
+            if custom_scripts:
+                for script in custom_scripts:
+                   script_path = os.path.join(local_dir, script)
+                   if os.path.exists(script_path) and os.path.isfile(script_path) and os.access(script_path, os.X_OK):
+                       for phase in script_phases:
+                        if script.startswith(phase):
+                            script_phases[phase].append(script)
+                            break
+            script_dir = os.path.join(local_dir, "scriptdata")
+            if not os.path.exists(script_dir) or not os.path.isdir(script_dir):
+                return script_phases
+
+            for item in os.listdir(script_dir):
+                item_path = os.path.join(script_dir, item)
+                if os.path.isfile(item_path) and os.access(item_path, os.X_OK):
+                    script_path = os.path.join("scriptdata", item)
+                    for phase in script_phases:
+                        if item.startswith(phase):
+                            script_phases[phase].append(script_path)
+                            break
+            return script_phases
+        except Exception as e:
+            raise FileOperationError(f"Failed to discover scripts in {local_dir}: {e}")
+    
+    def apply_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, overwrite_symlink = None, custom_paths = None, ignore_rules = False, template_context = {}, discover_templates = False, custom_scripts = None):
         """Applies dotfiles from a repository using GNU Stow."""
         try:
             rice_config = self.config_manager.get_rice_config(repository_name)
@@ -780,7 +822,7 @@ class DotfileManager:
             self.config_manager.add_rice_config(repository_name, rice_config)
             
             # Discover scripts
-            script_config = self._discover_scripts(local_dir)
+            script_config = self._discover_scripts(local_dir, custom_scripts)
             rice_config['script_config'].update(script_config)
             self.config_manager.add_rice_config(repository_name, rice_config)
             
@@ -1099,3 +1141,54 @@ class DotfileManager:
              return None
            else:
             self.logger.warning("Invalid choice, please type the exact name of a rice, or type N to cancel")
+
+    def _execute_scripts(self, scripts):
+        """Execute a list of scripts in order."""
+        for script in scripts:
+            self._run_script(script)
+
+    def _run_script(self, script):
+        """Run a single script file."""
+        # Implement script execution logic here
+        pass
+
+    def _process_package_lists(self, package_list_files):
+        """Install packages from package list files."""
+        for file in package_list_files:
+            packages = self._read_package_list(file)
+            self._install_packages(packages)
+
+    def _read_package_list(self, file):
+        """Read a package list from a file."""
+        # Implement logic to read package list
+        return []
+
+    def _install_packages(self, packages):
+        """Install a list of packages."""
+        # Implement package installation logic
+        pass
+
+    def _handle_assets(self, asset_directories):
+        """Handle asset management for directories."""
+        for directory in asset_directories:
+            self._process_assets(directory)
+
+    def _process_assets(self, directory):
+        """Process assets in a given directory."""
+        # Implement logic to process assets
+        pass
+
+    def _apply_complex_structure(self, structure):
+        """Apply configurations from complex directory structures."""
+        # Implement logic to navigate and apply configurations
+        pass
+
+    def _enhance_error_handling(self):
+        """Improve error handling and logging."""
+        # Implement enhanced error handling
+        pass
+
+    def _manage_profiles(self, profiles):
+        """Manage different profiles or environments."""
+        # Implement profile management logic
+        pass
