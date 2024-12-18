@@ -133,7 +133,7 @@ def main():
                     sys.exit(1)
             if args.profile:
                 dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
-            _handle_manage_apply_command(args, dotfile_manager, package_manager, manage=True)
+            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=True)
 
         elif args.command == "backup":
             if not dotfile_manager.create_backup(args.repository_name, args.backup_name):
@@ -142,13 +142,12 @@ def main():
         elif args.command == "apply":
             if args.profile:
                 dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
-            _handle_manage_apply_command(args, dotfile_manager, package_manager, manage=False)
-
+            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)
 
-def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, manage: bool = False) -> None:
+def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger, manage: bool = False) -> None:
     """Handles both the apply and manage commands, reducing code duplication."""
     try:
         if args.target_packages:
@@ -165,8 +164,8 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
             custom_paths = None
         if args.template_context:
             try:
-              with open(args.template_context, 'r') as f:
-                template_context = json.load(f)
+                with open(args.template_context, 'r') as f:
+                    template_context = json.load(f)
             except Exception as e:
                 logger.error(f"Error loading template context: {e}")
                 sys.exit(1)
@@ -175,7 +174,7 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
         if args.custom_scripts:
             custom_scripts = args.custom_scripts.split(",")
         else:
-          custom_scripts = None
+            custom_scripts = None
         if manage:
             if not dotfile_manager.manage_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules, template_context, args.discover_templates, custom_scripts):
                 sys.exit(1)
@@ -183,20 +182,21 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
             if args.skip_packages:
                 skip_packages = args.skip_packages.split(",")
             else:
-               skip_packages = []
+                skip_packages = []
             rice_config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
             if not rice_config:
                 logger.error(f"No configuration found for repository: {args.repository_name}")
                 sys.exit(1)
             dependencies = rice_config.get('dependencies', [])
             packages_to_install = [package for package in dependencies if package not in skip_packages]
-            if not package_manager.install(packages_to_install, local_dir = rice_config.get('local_directory')):
-               sys.exit(1)
+            if not package_manager.install(packages_to_install, local_dir=rice_config.get('local_directory')):
+                sys.exit(1)
             if args.overwrite_sym:
-              overwrite_sym = args.overwrite_sym
-            else: overwrite_sym = None
+                overwrite_sym = args.overwrite_sym.split(",")
+            else:
+                overwrite_sym = None
             if not dotfile_manager.apply_dotfiles(args.repository_name, stow_options, package_manager, target_packages, overwrite_sym, custom_paths, args.ignore_rules, template_context, args.discover_templates, custom_scripts):
-               sys.exit(1)
+                sys.exit(1)
     except Exception as e:
         logger.error(f"An error occurred in command: {args.command}. Error: {e}")
         sys.exit(1)
