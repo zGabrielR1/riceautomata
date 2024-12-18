@@ -656,53 +656,93 @@ class PackageManager:
     def _check_nix(self):
         """Checks if Nix is installed."""
         try:
-            result = self._run_command(["nix", "--version"])
-            if result and result.returncode == 0:
+            # First check if nix command exists
+            result = subprocess.run(["nix", "--version"], 
+                                 capture_output=True, 
+                                 text=True)
+            if result.returncode == 0:
+                self.logger.info("Nix is already installed")
                 self.nix_installed = True
                 return True
-            return False
         except FileNotFoundError:
-            self.logger.warning("Nix is not installed. Nix-related operations will be skipped.")
+            self.logger.info("Nix is not installed")
             self.nix_installed = False
             return False
         except Exception as e:
             self.logger.error(f"Error checking Nix installation: {e}")
             self.nix_installed = False
             return False
+        return False
 
     def _install_nix(self):
         """Attempts to install nix using the install script."""
-        self.logger.info("Nix not found, attempting to install.")
-        try:
-            install_nix_command = [
-              "sh", "-c",
-              'curl -L https://nixos.org/nix/install | sh -s -- --daemon'
-            ]
-            install_result = self._run_command(install_nix_command, check=False)
-            if install_result and install_result.returncode == 0:
-              self.logger.info("Nix installed successfully.")
-              self.nix_installed = True
-              return True
-            else:
-              self.logger.error("Failed to install Nix.")
-              return False
-        except Exception as e:
-            self.logger.error(f"Error installing nix: {e}")
-            return False
+        if self._check_nix():
+            return True
 
-    def _install_font_manually(self, font_path):
-        """Tries to install the font manually."""
-        try:
-          font_target_path = os.path.join(os.path.expanduser("~/.local/share/fonts"), os.path.basename(font_path))
-          if not os.path.exists(os.path.dirname(font_target_path)):
-            os.makedirs(os.path.dirname(font_target_path), exist_ok = True)
-          shutil.copy2(font_path, font_target_path)
-          self._run_command(["fc-cache", "-f", "-v"])
-          self.logger.info(f"Successfully installed font manually at: {font_target_path}")
-          return True
-        except Exception as e:
-          self.logger.error(f"Error installing font manually: {e}")
-          return False
+        self.logger.info("Attempting to install Nix...")
+        
+        # For Windows, we need to use the Windows-specific installer
+        if os.name == 'nt':
+            try:
+                # Download the Windows installer
+                download_cmd = [
+                    "powershell", 
+                    "-Command",
+                    "(New-Object System.Net.WebClient).DownloadFile('https://nixos.org/nix/install', 'nix-install.sh')"
+                ]
+                
+                if not self._run_command(download_cmd):
+                    self.logger.error("Failed to download Nix installer")
+                    return False
+                
+                # Run the installer with specific Windows settings
+                install_cmd = [
+                    "sh",
+                    "nix-install.sh",
+                    "--no-daemon"
+                ]
+                
+                if not self._run_command(install_cmd):
+                    self.logger.error("Failed to run Nix installer")
+                    return False
+                
+                # Clean up the installer
+                try:
+                    os.remove('nix-install.sh')
+                except Exception as e:
+                    self.logger.warning(f"Could not remove installer file: {e}")
+                
+                # Verify installation
+                if self._check_nix():
+                    self.logger.info("Nix installed successfully")
+                    return True
+                    
+            except Exception as e:
+                self.logger.error(f"Error during Nix installation: {e}")
+                return False
+        else:
+            # Unix-like systems installation
+            try:
+                install_cmd = [
+                    "sh", 
+                    "-c",
+                    'curl -L https://nixos.org/nix/install | sh -s -- --daemon'
+                ]
+                
+                if not self._run_command(install_cmd):
+                    self.logger.error("Failed to install Nix")
+                    return False
+                
+                # Verify installation
+                if self._check_nix():
+                    self.logger.info("Nix installed successfully")
+                    return True
+                    
+            except Exception as e:
+                self.logger.error(f"Error installing Nix: {e}")
+                return False
+        
+        return False
 
     def is_installed(self, package):
       """Checks if a package is installed using the appropriate package manager."""
@@ -736,3 +776,4 @@ class PackageManager:
             else:
                 self.logger.error(f"Unsupported package manager: {pm}")
                 return False
+```
