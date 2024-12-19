@@ -16,6 +16,11 @@ class ScriptRunner:
       """Runs a command and returns the result."""
       try:
           self.logger.debug(f"Running command: {' '.join(command)}")  # Log the command being run
+          
+          if command[0] == "git" and command[1] == "clone":
+            command.insert(2, "--config")
+            command.insert(3, "credential.helper=")
+          
           result = subprocess.run(command, capture_output=True, text=True, check=check, cwd=cwd, env=env)
           
           if check and result.stderr:
