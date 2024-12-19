@@ -161,9 +161,23 @@ class DotfileManager:
                 time.sleep(wait_time)
 
     def clone_repository(self, repository_url: str) -> bool:
-        """Clones a git repository with retry and rollback support."""
+        """Clones a git repository with retry and rollback support.
+        
+        Args:
+            repository_url (str): The URL of the git repository to clone. Supports various formats:
+                - HTTPS URLs (https://...)
+                - Git URLs (git://...)
+                - SSH URLs (git@...)
+                
+        Returns:
+            bool: True if cloning was successful, False otherwise
+        """
         backup_id = None
         try:
+            # Normalize repository URL
+            if repository_url.startswith('git://'):
+                repository_url = repository_url.replace('git://', 'https://')
+            
             repo_name = repository_url.split('/')[-1].replace(".git", "")
             local_dir = os.path.join(self.managed_rices_dir, repo_name)
             
@@ -173,17 +187,48 @@ class DotfileManager:
             # Start backup operation
             backup_id = self.backup_manager.start_operation_backup("clone_repository")
             
-            self.logger.info(f"Cloning repository into {local_dir}")
+            self.logger.info(f"Cloning repository from {repository_url} into {local_dir}")
             
-            # Define the clone operation
+            # Configure git to handle credentials and SSL
+            self.script_runner._run_command(["git", "config", "--global", "credential.helper", "store"])
+            self.script_runner._run_command(["git", "config", "--global", "http.sslVerify", "true"])
+            
+            # Define the clone operation with specific options
             def clone_op():
-                return self.script_runner._run_command(["git", "clone", repository_url, local_dir])
+                try:
+                    # Use --progress for better output and --recursive for submodules
+                    result = self.script_runner._run_command([
+                        "git", "clone",
+                        "--progress",
+                        "--recursive",
+                        repository_url,
+                        local_dir
+                    ])
+                    return result
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "authentication failed" in error_msg:
+                        self.logger.error("Authentication failed. Please ensure you have the correct credentials configured.")
+                        raise GitOperationError("Authentication failed. Use SSH key or configure git credentials.")
+                    elif "could not resolve host" in error_msg:
+                        self.logger.error("Could not resolve host. Please check your internet connection and the repository URL.")
+                        raise GitOperationError("Could not resolve host. Check internet connection and URL.")
+                    elif "permission denied" in error_msg:
+                        self.logger.error("Permission denied. Please check if you have access to this repository.")
+                        raise GitOperationError("Permission denied. Verify repository access permissions.")
+                    else:
+                        raise
             
             # Attempt to clone the repository with retries
             clone_result = self._retry_operation(clone_op)
 
             if clone_result:
                 self.logger.info(f"Repository cloned successfully to: {local_dir}")
+                
+                # Verify the clone was successful by checking for .git directory
+                if not os.path.exists(os.path.join(local_dir, ".git")):
+                    raise GitOperationError("Repository appears to be empty or not properly cloned")
+                
                 timestamp = create_timestamp()
                 config = {
                     'repository_url': repository_url,
@@ -214,10 +259,18 @@ class DotfileManager:
                 self.config_manager.add_rice_config(repo_name, config)
                 return True
             else:
-                self.logger.error("Failed to clone repository.")
+                self.logger.error("Failed to clone repository. Check the logs for more details.")
                 return False
+        except GitOperationError as e:
+            self.logger.error(f"Git operation failed: {str(e)}")
+            if backup_id:
+                try:
+                    self.backup_manager.rollback_operation(backup_id)
+                except Exception as rollback_error:
+                    self.logger.error(f"Failed to rollback after clone error: {rollback_error}")
+            return False
         except Exception as e:
-            self.logger.error(f"Error during repository cloning: {e}")
+            self.logger.error(f"Unexpected error during repository cloning: {str(e)}")
             if backup_id:
                 try:
                     self.backup_manager.rollback_operation(backup_id)
