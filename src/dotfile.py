@@ -94,24 +94,36 @@ class DotfileTree:
             logger.warning(f"Could not access {node.path}: {e}")
 
     def find_dependencies(self, node: DotfileNode):
-        """Find dependencies in configuration files"""
+        """Find dependencies in configuration files with format-specific parsing."""
         if os.path.isfile(node.path):
+            _, ext = os.path.splitext(node.path)
             try:
                 with open(node.path, 'r', encoding='utf-8') as f:
-                    content = f.read().lower()
-                    # Look for common dependency indicators
-                    if 'requires' in content or 'depends' in content or 'dependencies' in content:
-                        # Extract potential package names
-                        packages = set()
-                        lines = content.split('\n')
-                        for line in lines:
-                            if any(indicator in line for indicator in ['requires', 'depends', 'dependencies']):
-                                # Extract package names using various patterns
-                                potential_packages = re.findall(r'[\w-]+(?:>=?[\d.]+)?', line)
-                                packages.update(potential_packages)
-                        node.dependencies.update(packages)
+                    if ext == '.json':
+                        data = json.load(f)
+                        # Example for package.json
+                        if 'dependencies' in data:
+                            node.dependencies.update(data['dependencies'].keys())
+                    elif ext in ['.toml']:
+                        # Use toml parser
+                        import toml
+                        data = toml.load(f)
+                        if 'dependencies' in data:
+                            node.dependencies.update(data['dependencies'].keys())
+                    elif ext in ['.yaml', '.yml']:
+                        # Use yaml parser
+                        import yaml
+                        data = yaml.safe_load(f)
+                        if 'dependencies' in data:
+                            node.dependencies.update(data['dependencies'].keys())
+                    else:
+                        content = f.read().lower()
+                        # Fallback heuristic
+                        if any(indicator in content for indicator in ['requires', 'depends', 'dependencies']):
+                            packages = set(re.findall(r'[\w-]+(?:>=?[\d.]+)?', content))
+                            node.dependencies.update(packages)
             except Exception as e:
-                logger.warning(f"Could not analyze dependencies in {node.path}: {e}")
+                self.logger.warning(f"Could not analyze dependencies in {node.path}: {e}")
 
         for child in node.children:
             self.find_dependencies(child)
@@ -132,12 +144,6 @@ class DotfileManager:
         self.template_env = Environment(loader=FileSystemLoader('/'))
         self.max_retries = 3
         self.retry_delay = 2  # seconds
-        self.dotfile_dependencies = {
-            'dotfile1': ['package1', 'package2'],
-            'dotfile2': ['package3'],
-            'dotfile3': ['package1', 'package4'],
-            # Add more dotfiles and their dependencies here
-        }
         self.dotfile_tree = DotfileTree()
 
     def _ensure_managed_dir(self):
@@ -659,24 +665,21 @@ class DotfileManager:
          self.logger.error(f"Error applying nix configuration: {e}")
          return False
 
-    def _apply_directory_with_stow(self, local_dir, directory, stow_options = [], overwrite_destination = None):
-      """Applies the directory using GNU Stow with overwriting logic."""
-      if overwrite_destination:
-          if overwrite_destination.startswith("~"):
-             target_path = os.path.expanduser(overwrite_destination)
-          else:
-            target_path = overwrite_destination
-          self._overwrite_symlinks(target_path, local_dir, directory)
-          return True
+    def _apply_directory_with_stow(self, local_dir, directory, stow_options=[], overwrite_destination=None):
+        """Applies the directory using GNU Stow with overwriting logic."""
+        if overwrite_destination:
+            target_path = os.path.expanduser(overwrite_destination)
+            self._overwrite_symlinks(target_path, local_dir, directory)
+            return True
 
-      stow_command = ["stow", "-v"]
-      stow_command.extend(stow_options)
-      stow_command.append(os.path.basename(directory))
-      stow_result = self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
-      if not stow_result or stow_result.returncode != 0:
-          self.logger.error(f"Failed to stow directory: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
-          return False
-      return True
+        stow_command = ["stow", "-v"]
+        stow_command.extend(stow_options)
+        stow_command.append(os.path.basename(directory))
+        stow_result = self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
+        if not stow_result or stow_result.returncode != 0:
+            self.logger.error(f"Failed to stow directory: {directory}. Check if Stow is installed, and if the options are correct: {stow_options}")
+            return False
+        return True
 
 
     def _apply_config_directory(self, local_dir, directory, stow_options = [], overwrite_destination=None):
@@ -892,40 +895,6 @@ class DotfileManager:
             )
         except Exception as e:
             raise FileOperationError(f"Failed to remove dotfiles from {target_dir}: {e}")
-
-
-    def plates(self, local_dir, dotfile_dirs, context, discover_templates = False):
-        """Applies all the templates with the correct context."""
-        for directory, category in dotfile_dirs.items():
-            dir_path = os.path.join(local_dir, directory)
-            if not os.path.exists(dir_path):
-                continue
-            for root, _, files in os.walk(dir_path):
-                 for item in files:
-                    item_path = os.path.join(root, item)
-                    if discover_templates and os.path.isfile(item_path) and item.endswith(".tpl"):
-                        template_content = self._process_template_file(item_path, context)
-                        if template_content:
-                            output_path = item_path.replace(".tpl", "")
-                            try:
-                                with open(output_path, 'w') as f:
-                                    f.write(template_content)
-                                    self.logger.debug(f"Template {item_path} processed and saved in {output_path}")
-                            except Exception as e:
-                                self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
-                    elif not discover_templates and os.path.isfile(item_path) and os.path.dirname(item_path) == dir_path:
-                         if item.endswith(".tpl"):
-                            template_content = self._process_template_file(item_path, context)
-                            if template_content:
-                                output_path = item_path.replace(".tpl", "")
-                                try:
-                                    with open(output_path, 'w') as f:
-                                        f.write(template_content)
-                                        self.logger.debug(f"Template {item_path} processed and saved in {output_path}")
-                                except Exception as e:
-                                   self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
-        return True
-
 
     def _discover_scripts(self, local_dir: str, custom_scripts = None) -> Dict[str, List[str]]:
         """Discovers executable files inside a "scriptdata" directory."""
@@ -1293,8 +1262,13 @@ class DotfileManager:
 
     def _run_script(self, script):
         """Run a single script file."""
-        # Implement script execution logic here
-        pass
+        try:
+            self.logger.info(f"Executing script: {script}")
+            result = subprocess.run([script], check=True, shell=True, capture_output=True, text=True)
+            self.logger.debug(f"Script output: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Script {script} failed with error: {e.stderr}")
+            raise ScriptExecutionError(f"Script {script} failed.")
 
     def _process_package_lists(self, package_list_files):
         """Install packages from package list files."""
