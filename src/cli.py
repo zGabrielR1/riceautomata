@@ -46,19 +46,49 @@ def main():
     # Apply dotfiles command
     apply_parser = subparsers.add_parser("apply", aliases=["-A"], help="Apply dotfiles from a local repository")
     
-    apply_parser.add_argument("repository_name", type=str, help="Name of the repository to apply")
-    apply_parser.add_argument("--discover-templates", action="store_true", help="Discover all templates recursively in all directories.")
-    apply_parser.add_argument("--custom-scripts", type=str, help="List of custom scripts to be discovered, separated with commas")
-    apply_parser.add_argument("--skip-packages", type=str, help="List of packages to be skipped, separated with commas")
-    apply_parser.add_argument("--stow-options", type=str, help="Options for GNU Stow command, separated with spaces")
-    apply_parser.add_argument("--target-packages", type=str, help="List of packages to install only the configs, separated with commas")
-    apply_parser.add_argument("--overwrite-sym", type=str, help="Overwrite specific symlinks, separated with commas")
-    apply_parser.add_argument("--custom-paths", type=str, help="List of custom paths to be discovered as dotfiles, separated with commas")
-    apply_parser.add_argument("--ignore-rules", action="store_true", help="Ignores the custom rules for discovering dotfiles.")
-    apply_parser.add_argument("--template-context", type=str, help="Path to the json with template variables")
-    apply_parser.add_argument("--custom-extras-paths", type=str, help="Path to the JSON with custom extras paths")
-    apply_parser.add_argument("--profile", type=str, help="Profile to use for this operation")
-    
+    apply_parser.add_argument(
+    "repository_name", type=lambda s: s.split(","), default=[], 
+    help="Name of the repository to apply")
+    apply_parser.add_argument(
+        "--discover-templates", action="store_true",
+        help="Discover all templates recursively in all directories."
+    )
+    apply_parser.add_argument(
+    "--custom-scripts", type=lambda s: s.split(","), default=[],
+    help="List of custom scripts to be discovered, separated by commas"
+    )
+    apply_parser.add_argument(
+    "--custom-rules", type=lambda s: s.split(","), default=[],
+    help="List of custom rules to be discovered, separated by commas"
+    )
+    apply_parser.add_argument(
+    "--stow-options", type=lambda s: s.split(" "), default=[],
+    help="Options for GNU Stow command, separated by spaces"
+    )
+    apply_parser.add_argument(
+    "--target-packages", type=lambda s: s.split(","), default=[],
+    help="List of packages to install only the configs, separated by commas"
+    )
+    apply_parser.add_argument(
+    "--custom-paths", type=lambda s: s.split(","), default=[],
+    help="List of custom paths to be discovered as dotfiles, separated by commas"
+    )
+    apply_parser.add_argument(
+    "--ignore-rules", action="store_true", 
+    help="Ignores the custom rules for discovering dotfiles."
+    )
+    apply_parser.add_argument(
+    "--template-context", type=lambda s: s.split(","),default=[], 
+    help="Path to the json with template variables"
+    )
+    apply_parser.add_argument(
+    "--custom-extras-paths", type=lambda s: s.split(","), default=[],
+    help="List of custom paths to be discovered as extras, separated by commas"
+    )
+    apply_parser.add_argument(
+    "--profile", type=lambda s: s.split(","), default=[], 
+    help="Profile to use for this operation"
+    )
 
     # Manage dotfiles command
     manage_parser = subparsers.add_parser("manage", aliases=["-m"], help="Manage dotfiles, uninstalling the previous ones, and applying the new ones")
