@@ -4,6 +4,13 @@ RiceAutomator is a powerful, flexible, and intelligent command-line tool designe
 
 ## Features
 
+- **Fully Automated Installation:**
+  - One-command installation of any rice directory
+  - Automatic dependency detection and parallel installation
+  - Smart system compatibility checking
+  - Intelligent installation strategy selection
+  - Automatic rollback on failure
+
 - **Robust Error Handling & Recovery:**
   - Automatic backup creation before any file operation
   - Rollback support for failed operations
@@ -26,12 +33,14 @@ RiceAutomator is a powerful, flexible, and intelligent command-line tool designe
   - Smart categorization of dotfiles (configs, wallpapers, scripts)
   - Custom rules engine for specialized detection
   - Supports unconventional directory structures
+  - Automatic dependency detection from config files
 
 - **File Operations:**
   - Automatic backup before modifications
   - Safe file operations with rollback support
   - Template processing with variable substitution
   - GNU Stow integration for symlinking
+  - Parallel processing for faster deployment
 
 - **Additional Features:**
   - Selective package installation
@@ -41,15 +50,31 @@ RiceAutomator is a powerful, flexible, and intelligent command-line tool designe
   - Custom stow options
   - Profile-based configurations
 
-## Nix Rice Installation
+## Quick Start
 
-RiceAutomator now supports the installation of Nix rices. This feature works as follows:
+### Automated Installation
 
-- **Non-NixOS Systems**: If Nix is not installed, the system will skip the installation of Nix rices without generating an error. Users are encouraged to install Nix if they wish to use Nix rices.
+The fastest way to install a rice is using the auto-install command:
 
-- **NixOS Systems**: The application will automatically detect and install Nix rices if Nix is available, providing seamless integration with the existing system configuration.
+```bash
+python -m src.cli auto-install /path/to/rice
+```
 
-To install a Nix rice, simply include it in your repository's configuration. The application will handle the rest, ensuring compatibility and proper installation based on your system's capabilities.
+This will:
+1. Automatically detect your system configuration
+2. Find and install all required dependencies
+3. Choose the best installation method (Nix, Stow, or direct symlinks)
+4. Apply the rice configurations
+5. Handle any errors and rollback if needed
+
+Options:
+- `--force`: Force installation even if conflicts exist
+- `--no-deps`: Skip dependency installation
+- `-v` or `--verbose`: Enable verbose output
+
+### Manual Installation
+
+If you prefer more control over the installation process, you can still use the traditional commands:
 
 ## Installation
 
@@ -212,6 +237,16 @@ Example `vars.json`:
    ./src/cli.py switch-profile my-dotfiles work
    ./src/cli.py apply my-dotfiles
    ```
+
+## Nix Rice Installation
+
+RiceAutomator supports the installation of Nix rices with automatic detection:
+
+- **Automatic Detection**: The system automatically detects if a rice contains Nix configurations
+- **Non-NixOS Systems**: If Nix is not installed, the system will automatically fall back to using GNU Stow or direct symlinks
+- **NixOS Systems**: Automatic detection and installation of Nix rices if Nix is available
+
+To install a Nix rice, simply include it in your repository's configuration. The application will handle the rest, ensuring compatibility and proper installation based on your system's capabilities.
 
 ## Error Handling
 
