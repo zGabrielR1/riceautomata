@@ -1,5 +1,5 @@
 # src/config.py
-from src.exceptions import ConfigurationError, ValidationError
+from exceptions import ConfigurationError, ValidationError
 import json
 import os
 from src.utils import sanitize_path, setup_logger
