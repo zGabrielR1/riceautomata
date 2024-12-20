@@ -258,4 +258,10 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Add the project root to the Python path when running directly
+    import os
+    import sys
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    sys.path.insert(0, project_root)
+    
     main()
