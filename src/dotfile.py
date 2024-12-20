@@ -1,4 +1,3 @@
-
 # src/dotfile.py
 import os
 import shutil
@@ -1164,30 +1163,23 @@ class DotfileManager:
 
     def analyze_rice_directory(self, rice_path: str) -> Dict[str, Any]:
         """Analyze a rice directory and return its structure and requirements"""
-        tree = self.dotfile_tree.build_tree(rice_path)
-        self.dotfile_tree.find_dependencies(tree)
+        tree = DotfileTree()
+        root = tree.build_tree(rice_path)
+        tree.find_dependencies(root)
 
-        # Collect all dotfiles and their dependencies
-        dotfiles = []
-        nix_configs = []
-        all_dependencies = set()
-
+        is_nix_config = False
         def traverse(node):
-            if node.is_dotfile:
-                dotfiles.append(node.path)
-                all_dependencies.update(node.dependencies)
+            nonlocal is_nix_config
             if node.is_nix_config:
-                nix_configs.append(node.path)
+                is_nix_config = True
             for child in node.children:
                 traverse(child)
 
-        traverse(tree)
+        traverse(root)
 
         return {
-            'dotfiles': dotfiles,
-            'dependencies': list(all_dependencies),
-            'has_nix': bool(nix_configs),
-            'nix_configs': nix_configs
+            'is_nix_config': is_nix_config,
+            'dependencies': list(root.dependencies)
         }
 
     def detect_rice_variants(self, rice_path: str) -> List[str]:

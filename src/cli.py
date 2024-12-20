@@ -184,23 +184,23 @@ def main():
 def _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
     """Handles the installation of Nix rices."""
     try:
-        rice_config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
-        if not rice_config:
-            logger.error(f"No configuration found for repository: {args.repository_name}")
-            return False
-
-        if 'nix' in rice_config.get('dependencies', []):
+        rice_config = dotfile_manager.analyze_rice_directory(args.repository_name)
+        
+        # Only proceed with Nix installation if we detect Nix files
+        if rice_config.get('is_nix_config', False):
             if not package_manager._check_nix():
-                logger.info("Nix is not installed. Skipping Nix rice installation.")
+                logger.info("Nix configuration detected but Nix is not installed. Skipping Nix-specific setup.")
                 return True
-
+            
             logger.info("Installing Nix rice...")
             # Implement logic to install Nix rice here
             # Example: package_manager.install_nix_rice(rice_config)
             return True
+        
+        return True  # Not a Nix rice, continue normally
 
     except Exception as e:
-        logger.error(f"An error occurred during Nix rice installation: {e}")
+        logger.error(f"An error occurred during rice analysis: {e}")
         return False
 
 def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger, manage: bool = False) -> None:
