@@ -108,6 +108,12 @@ def main():
     backup_parser.add_argument("backup_name", type=str, help="Name of the backup")
     backup_parser.add_argument("repository_name", type=str, help="Name of the repository to back up")
 
+    # Auto-install command
+    auto_install_parser = subparsers.add_parser("auto-install", help="Automatically install a rice with all dependencies")
+    auto_install_parser.add_argument("path", help="Path to the rice directory")
+    auto_install_parser.add_argument("--force", action="store_true", help="Force installation even if conflicts exist")
+    auto_install_parser.add_argument("--no-deps", action="store_true", help="Skip dependency installation")
+
     # Global options
     parser.add_argument("--distro", type=str, help="Specify the distribution to use")
     parser.add_argument("--aur-helper", type=str, default="paru", choices=["paru", "yay"], help="Specify the AUR helper to use")
@@ -177,6 +183,27 @@ def main():
             if not _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
                 sys.exit(1)
             _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
+
+        elif args.command == "auto-install":
+            try:
+                dotfile_manager = DotfileManager(verbose=args.verbose)
+                logger.info(f"{Fore.CYAN}Starting automated rice installation from: {args.path}{Style.RESET_ALL}")
+                
+                if not os.path.isdir(args.path):
+                    logger.error(f"{Fore.RED}Error: {args.path} is not a valid directory{Style.RESET_ALL}")
+                    sys.exit(1)
+                    
+                success = dotfile_manager.apply_rice_automated(args.path)
+                
+                if success:
+                    logger.info(f"{Fore.GREEN}Rice installation completed successfully!{Style.RESET_ALL}")
+                else:
+                    logger.error(f"{Fore.RED}Rice installation failed. Check logs for details.{Style.RESET_ALL}")
+                    sys.exit(1)
+                    
+            except Exception as e:
+                logger.error(f"{Fore.RED}Error during automated installation: {str(e)}{Style.RESET_ALL}")
+                sys.exit(1)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)

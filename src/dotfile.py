@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Any
 import time
 import toml
 import yaml
+import asyncio
 
 logger = setup_logger()
 
@@ -1224,6 +1225,143 @@ class DotfileManager:
             except Exception as e:
                 self.logger.error(f"Failed to install Nix: {e}")
                 return False
+
+    def _detect_package_dependencies(self, config_file: str) -> List[str]:
+        """Detect package dependencies from various config file formats"""
+        dependencies = set()
+        
+        if not os.path.exists(config_file):
+            return list(dependencies)
+            
+        with open(config_file, 'r') as f:
+            content = f.read()
+            
+        # Common package patterns
+        patterns = [
+            r'requires\s*=\s*[\'"](.*?)[\'"]',  # Python style
+            r'depends\s*=\s*[\'"](.*?)[\'"]',   # PKGBUILD style
+            r'package\s*:\s*(.*?)$',            # YAML style
+            r'\"dependencies\":\s*{([^}]*)}',   # package.json style
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, content, re.MULTILINE)
+            for match in matches:
+                deps = match.group(1).split()
+                dependencies.update(deps)
+                
+        return list(dependencies)
+
+    def _check_system_compatibility(self) -> Dict[str, bool]:
+        """Check system compatibility for the rice installation"""
+        compatibility = {
+            'nix_support': False,
+            'stow_available': False,
+            'xorg_present': False,
+            'wayland_present': False,
+            'package_manager': None
+        }
+        
+        # Check for Nix
+        try:
+            subprocess.run(['nix', '--version'], capture_output=True)
+            compatibility['nix_support'] = True
+        except FileNotFoundError:
+            pass
+            
+        # Check for GNU Stow
+        try:
+            subprocess.run(['stow', '--version'], capture_output=True)
+            compatibility['stow_available'] = True
+        except FileNotFoundError:
+            pass
+            
+        # Detect display server
+        if os.environ.get('WAYLAND_DISPLAY'):
+            compatibility['wayland_present'] = True
+        elif os.environ.get('DISPLAY'):
+            compatibility['xorg_present'] = True
+            
+        # Detect package manager
+        for pm in ['pacman', 'apt', 'dnf', 'zypper']:
+            try:
+                subprocess.run([pm, '--version'], capture_output=True)
+                compatibility['package_manager'] = pm
+                break
+            except FileNotFoundError:
+                continue
+                
+        return compatibility
+
+    async def _parallel_install_dependencies(self, dependencies: List[str]):
+        """Install dependencies in parallel for faster deployment"""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        async def install_pkg(pkg: str):
+            try:
+                if self.system_info['package_manager'] == 'pacman':
+                    cmd = ['pacman', '-S', '--noconfirm', pkg]
+                elif self.system_info['package_manager'] == 'apt':
+                    cmd = ['apt', 'install', '-y', pkg]
+                else:
+                    return False
+                    
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+                return proc.returncode == 0
+            except Exception as e:
+                self.logger.error(f"Failed to install {pkg}: {str(e)}")
+                return False
+                
+        with ThreadPoolExecutor() as executor:
+            tasks = [install_pkg(dep) for dep in dependencies]
+            results = await asyncio.gather(*tasks)
+            
+        return all(results)
+
+    def apply_rice_automated(self, rice_path: str):
+        """Fully automated rice installation process"""
+        try:
+            # 1. System compatibility check
+            self.system_info = self._check_system_compatibility()
+            
+            # 2. Analyze rice structure
+            rice_analysis = self.analyze_rice_directory(rice_path)
+            
+            # 3. Detect and collect all dependencies
+            all_deps = set()
+            for config_file in rice_analysis['config_files']:
+                deps = self._detect_package_dependencies(config_file)
+                all_deps.update(deps)
+                
+            # 4. Install dependencies
+            if all_deps:
+                asyncio.run(self._parallel_install_dependencies(list(all_deps)))
+                
+            # 5. Determine installation strategy
+            if self.system_info['nix_support'] and rice_analysis['has_nix_config']:
+                self._apply_nix_config(rice_path, self.system_info['package_manager'])
+            elif self.system_info['stow_available']:
+                self._apply_directory_with_stow(rice_path, rice_analysis['dotfile_dirs'])
+            else:
+                self._apply_direct_symlinks(rice_path, rice_analysis['dotfile_dirs'])
+                
+            # 6. Apply post-installation configuration
+            if rice_analysis['post_install_scripts']:
+                self._execute_scripts(rice_analysis['post_install_scripts'])
+                
+            return True
+                
+        except Exception as e:
+            self.logger.error(f"Failed to install rice: {str(e)}")
+            self._rollback_changes()
+            return False
+
 class ConfigManager:
     def __init__(self):
         self.config_dir = os.path.join(os.path.expanduser("~"), ".config", "rice-automata")
