@@ -1,6 +1,6 @@
-# src/dotfile.py
-import os
-import shutil
+# Here are some functions of it:
+
+# Example template:
 import subprocess
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
@@ -96,6 +96,36 @@ class DotfileTree:
         except (PermissionError, OSError) as e:
             logger.warning(f"Could not access {node.path}: {e}")
 
+    def parse_json_dependencies(self, file):
+        data = json.load(file)
+        dependencies = set()
+        if isinstance(data, dict):
+            if 'dependencies' in data:
+                dependencies.update(data['dependencies'].keys())
+            if 'devDependencies' in data:
+                dependencies.update(data['devDependencies'].keys())
+        return dependencies
+
+    def parse_toml_dependencies(self, file):
+        data = toml.load(file)
+        dependencies = set()
+        if isinstance(data, dict):
+            for section in ['dependencies', 'build-dependencies', 'dev-dependencies']:
+                if section in data and isinstance(data[section], dict):
+                    dependencies.update(data[section].keys())
+        return dependencies
+
+    def parse_yaml_dependencies(self, file):
+        data = yaml.safe_load(file)
+        dependencies = set()
+        if isinstance(data, dict):
+            for key in ['dependencies', 'requires']:
+                if key in data and isinstance(data[key], list):
+                    dependencies.update(data[key])
+                elif key in data and isinstance(data[key], dict):
+                    dependencies.update(data[key].keys())
+        return dependencies
+
     def find_dependencies(self, node: DotfileNode):
         """Find dependencies in configuration files with format-specific parsing."""
         if os.path.isfile(node.path):
@@ -103,26 +133,11 @@ class DotfileTree:
             try:
                 with open(node.path, 'r', encoding='utf-8') as f:
                     if ext == '.json':
-                        data = json.load(f)
-                        if isinstance(data, dict):  # Ensure data is a dictionary
-                            if 'dependencies' in data:
-                                node.dependencies.update(data['dependencies'].keys())
-                            if 'devDependencies' in data:
-                                node.dependencies.update(data['devDependencies'].keys())
+                        node.dependencies.update(self.parse_json_dependencies(f))
                     elif ext in ['.toml']:
-                        data = toml.load(f)
-                        if isinstance(data, dict):
-                            for section in ['dependencies', 'build-dependencies', 'dev-dependencies']:
-                                if section in data and isinstance(data[section], dict):
-                                    node.dependencies.update(data[section].keys())
+                        node.dependencies.update(self.parse_toml_dependencies(f))
                     elif ext in ['.yaml', '.yml']:
-                        data = yaml.safe_load(f)
-                        if isinstance(data, dict):
-                            for key in ['dependencies', 'requires']:
-                                if key in data and isinstance(data[key], list):
-                                    node.dependencies.update(data[key])
-                                elif key in data and isinstance(data[key], dict):
-                                    node.dependencies.update(data[key].keys())
+                        node.dependencies.update(self.parse_yaml_dependencies(f))
                     else:
                         content = f.read().lower()
                         if any(indicator in content for indicator in ['requires', 'depends', 'dependencies']):
@@ -133,6 +148,7 @@ class DotfileTree:
 
         for child in node.children:
             self.find_dependencies(child)
+
 
 class DotfileManager:
 
