@@ -1,6 +1,3 @@
-# Here are some functions of it:
-
-# Example template:
 import subprocess
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
@@ -11,6 +8,7 @@ from src.exceptions import (
     FileOperationError, ValidationError, RollbackError, TemplateRenderingError, ScriptExecutionError
 )
 import sys
+import os
 import re
 import json
 from jinja2 import Environment, FileSystemLoader
@@ -19,6 +17,7 @@ import time
 import toml
 import yaml
 import asyncio
+import shutil
 
 logger = setup_logger()
 
@@ -704,7 +703,7 @@ class DotfileManager:
                         template = self.template_env.get_template(os.path.relpath(template_path, source_dir))
                         rendered_content = template.render(**template_context)
                         output_path = template_path.replace(".tpl", "")
-                        with open(output_path, 'w', encoding='utf-8') as f:
+                        with open(output_path, 'w', encoding='utf-8'):
                             f.write(rendered_content)
                         self.logger.info(f"Rendered template: {output_path}")
                     except Exception as e:
@@ -947,6 +946,151 @@ class DotfileManager:
             return self.package_manager.install(missing_packages, None)
         return True
 
+    def _install_packages(self, packages):
+        """Install a list of packages using the appropriate package manager."""
+        if not packages:
+            self.logger.debug("No packages to install")
+            return True
+
+        try:
+            # Check if packages are already installed
+            missing_packages = [pkg for pkg in packages if not self._check_installed_packages([pkg])]
+            
+            if not missing_packages:
+                self.logger.info("All packages are already installed")
+                return True
+
+            if not confirm_action(f"The following packages will be installed: {', '.join(missing_packages)}"):
+                return False
+
+            # Install missing packages
+            return self._install_missing_packages(missing_packages)
+        except Exception as e:
+            self.logger.error(f"Failed to install packages: {e}")
+            return False
+
+    def _read_package_list(self, file):
+        """Read a package list from a file.
+        
+        Supports various formats:
+        - Plain text (one package per line)
+        - JSON (array of package names)
+        - YAML/TOML (list of package names)
+        """
+        try:
+            file_ext = os.path.splitext(file)[1].lower()
+            with open(file, 'r') as f:
+                if file_ext == '.json':
+                    packages = json.load(f)
+                elif file_ext in ['.yaml', '.yml']:
+                    packages = yaml.safe_load(f)
+                elif file_ext == '.toml':
+                    packages = toml.load(f)
+                else:
+                    # Plain text format, one package per line
+                    packages = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+            # Ensure the result is a list of strings
+            if isinstance(packages, list):
+                return [str(pkg) for pkg in packages if pkg]
+            elif isinstance(packages, dict) and 'packages' in packages:
+                return [str(pkg) for pkg in packages['packages'] if pkg]
+            else:
+                self.logger.error(f"Invalid package list format in {file}")
+                return []
+        except Exception as e:
+            self.logger.error(f"Error reading package list from {file}: {e}")
+            return []
+
+    def _process_assets(self, directory):
+        """Process assets in a given directory.
+        
+        This includes:
+        - Copying assets to appropriate locations
+        - Setting correct permissions
+        - Creating necessary directories
+        """
+        if not os.path.exists(directory):
+            self.logger.warning(f"Asset directory does not exist: {directory}")
+            return False
+
+        try:
+            target_dir = os.path.expanduser("~/.local/share")
+            
+            # Create target directory if it doesn't exist
+            os.makedirs(target_dir, exist_ok=True)
+
+            # Copy assets while preserving permissions
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    src_path = os.path.join(root, file)
+                    # Calculate relative path from the asset directory
+                    rel_path = os.path.relpath(src_path, directory)
+                    dst_path = os.path.join(target_dir, rel_path)
+                    
+                    # Create parent directories if they don't exist
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                    
+                    # Copy the file while preserving metadata
+                    shutil.copy2(src_path, dst_path)
+                    
+                    # Set appropriate permissions (readable by user and group)
+                    os.chmod(dst_path, 0o644)
+
+            self.logger.info(f"Successfully processed assets from {directory}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error processing assets from {directory}: {e}")
+            return False
+
+    def _manage_profiles(self, profiles):
+        """Manage different profiles or environments.
+        
+        Profiles can include:
+        - Different package sets
+        - Different configurations
+        - Environment-specific settings
+        """
+        if not profiles:
+            self.logger.debug("No profiles to manage")
+            return True
+
+        try:
+            for profile_name, profile_data in profiles.items():
+                self.logger.info(f"Processing profile: {profile_name}")
+                
+                # Create profile in config manager
+                self.config_manager.create_profile(profile_data.get('repository', ''), profile_name)
+                
+                # Process profile-specific packages
+                if 'packages' in profile_data:
+                    self._install_packages(profile_data['packages'])
+                
+                # Process profile-specific configurations
+                if 'config' in profile_data:
+                    config_dir = os.path.expanduser(profile_data['config'].get('target_dir', '~/.config'))
+                    os.makedirs(config_dir, exist_ok=True)
+                    
+                    for config_file, config_content in profile_data['config'].get('files', {}).items():
+                        target_path = os.path.join(config_dir, config_file)
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        
+                        with open(target_path, 'w') as f:
+                            if isinstance(config_content, dict):
+                                json.dump(config_content, f, indent=2)
+                            else:
+                                f.write(str(config_content))
+            
+                # Process profile-specific assets
+                if 'assets' in profile_data:
+                    self._process_assets(profile_data['assets'])
+
+            self.logger.info("Successfully managed all profiles")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error managing profiles: {e}")
+            return False
+
     def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, custom_paths = None, ignore_rules = False, template_context = {}):
          """Manages the dotfiles, uninstalling the previous rice, and applying the new one."""
          current_rice = None
@@ -1143,31 +1287,71 @@ class DotfileManager:
             packages = self._read_package_list(file)
             self._install_packages(packages)
 
-    def _read_package_list(self, file):
-        """Read a package list from a file."""
-        # Implement logic to read package list
-        return []
-
-    def _install_packages(self, packages):
-        """Install a list of packages."""
-        # Implement package installation logic
-        pass
-
     def _handle_assets(self, asset_directories):
         """Handle asset management for directories."""
         for directory in asset_directories:
             self._process_assets(directory)
 
-    def _process_assets(self, directory):
-        """Process assets in a given directory."""
-        # Implement logic to process assets
-        pass
-
     def _apply_complex_structure(self, structure):
         """Apply configurations from complex directory structures."""
-        # Implement logic to navigate and apply configurations
-        pass
+        
+        if not os.path.exists(structure):
+            self.logger.error(f"Structure path does not exist: {structure}")
+            return False
 
+        if os.path.isfile(structure):
+            self.logger.error(f"Structure path is a file, not a directory: {structure}")
+            return False
+        
+        top_level_dirs = [item for item in os.listdir(structure) if os.path.isdir(os.path.join(structure, item))]
+
+        if not top_level_dirs:
+            self.logger.warning(f"No subdirectories found in: {structure}")
+            return False
+        
+        if len(top_level_dirs) > 1:
+             chosen_rice = self._prompt_multiple_rices(top_level_dirs)
+             if not chosen_rice:
+                 self.logger.warning("Installation aborted.")
+                 return False
+             structure = os.path.join(structure, chosen_rice)
+
+        if len(top_level_dirs) == 1:
+            structure = os.path.join(structure, top_level_dirs[0])
+            
+        def apply_recursive(base_dir, target_base="~"):
+          for item in os.listdir(base_dir):
+                full_path = os.path.join(base_dir, item)
+                target_path = os.path.join(os.path.expanduser(target_base), item)
+                
+                if os.path.isdir(full_path):
+                     if item == ".config":
+                         self._apply_config_directory(base_dir, item)
+                     elif item == ".cache":
+                         self._apply_cache_directory(base_dir, item)
+                     elif item == ".local":
+                         self._apply_local_directory(base_dir, item)
+                     elif item == "wallpapers" or item == "wallpaper" or item == "backgrounds":
+                        self._apply_other_directory(base_dir, item) #Handle wallpaper folder
+                     elif item == "Extras": #Handle extra folder
+                       for extra_item in os.listdir(full_path):
+                           extra_item_path = os.path.join(full_path, extra_item)
+                           if os.path.isdir(extra_item_path):
+                              self._apply_extra_directory(full_path, extra_item, "/")
+                           else:
+                              self._apply_extra_directory(full_path, extra_item, "/") #Handle single files in extras.
+                     else:
+                         apply_recursive(full_path, target_path)
+                elif os.path.isfile(full_path):
+                    try:
+                        shutil.copy2(full_path, target_path)
+                        self.logger.info(f"Copied file {full_path} to {target_path}")
+                    except Exception as e:
+                        self.logger.error(f"Error copying file {full_path} to {target_path}: {e}")
+
+        apply_recursive(structure)
+        return True
+    
     def _enhance_error_handling(self):
         """Improve error handling and logging."""
         # Implement enhanced error handling
@@ -1363,9 +1547,33 @@ class DotfileManager:
             if self.system_info['nix_support'] and rice_analysis['has_nix_config']:
                 self._apply_nix_config(rice_path, self.system_info['package_manager'])
             elif self.system_info['stow_available']:
-                self._apply_directory_with_stow(rice_path, rice_analysis['dotfile_dirs'])
+                # We need to analyze the dotfile structure before using stow
+                tree = DotfileTree()
+                root = tree.build_tree(rice_path)
+
+                dotfile_dirs = {}
+                def traverse_tree(node):
+                   if node.is_dotfile:
+                      rel_path = os.path.relpath(node.path, rice_path)
+                      category = self._categorize_dotfile_directory(node.path)
+                      dotfile_dirs[rel_path] = category
+                   for child in node.children:
+                      traverse_tree(child)
+                traverse_tree(root)
+
+                # Apply directories
+                for directory, category in dotfile_dirs.items():
+                     if category == "config":
+                        self._apply_config_directory(rice_path, directory)
+                     elif category == "cache":
+                        self._apply_cache_directory(rice_path, directory)
+                     elif category == "local":
+                        self._apply_local_directory(rice_path, directory)
+                     else:
+                         self._apply_other_directory(rice_path, directory)
             else:
-                self._apply_direct_symlinks(rice_path, rice_analysis['dotfile_dirs'])
+                #Apply a complex structure
+                self._apply_complex_structure(rice_path)
                 
             # 6. Apply post-installation configuration
             if rice_analysis['post_install_scripts']:
