@@ -22,190 +22,124 @@ def print_profiles(profiles: Dict[str, Any], active_profile: str) -> None:
 
 def main():
     sys.excepthook = exception_handler
-    parser = argparse.ArgumentParser(description="Automate the management of dotfiles")
+    parser = argparse.ArgumentParser(
+        description="RiceAutomata - A powerful dotfile and system configuration manager",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  riceautomata clone https://github.com/user/dotfiles
+  riceautomata apply my-dotfiles
+  riceautomata -A my-dotfiles --profile minimal
+  riceautomata manage my-dotfiles --target-packages i3,polybar
+  riceautomata list-profiles my-dotfiles
+""")
+    
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
 
     subparsers = parser.add_subparsers(title="Commands", dest="command", help="Available commands")
 
-    # Profile management commands
-    list_profiles_parser = subparsers.add_parser("list-profiles", help="List available profiles for a repository")
-    list_profiles_parser.add_argument("repository_name", type=str, help="Name of the repository")
+    # Clone command
+    clone_parser = subparsers.add_parser("clone", aliases=["-S"], 
+        help="Clone a dotfiles repository")
+    clone_parser.add_argument("repository_url", help="URL of the repository to clone")
 
-    create_profile_parser = subparsers.add_parser("create-profile", help="Create a new profile for a repository")
-    create_profile_parser.add_argument("repository_name", type=str, help="Name of the repository")
-    create_profile_parser.add_argument("profile_name", type=str, help="Name of the new profile")
+    # Apply command
+    apply_parser = subparsers.add_parser("apply", aliases=["-A"], 
+        help="Apply dotfiles from a repository")
+    apply_parser.add_argument("repository_name", help="Name of the repository to apply")
+    apply_parser.add_argument("-p", "--profile", help="Profile to use")
+    apply_parser.add_argument("-t", "--target-packages", help="Comma-separated list of packages to configure")
+    apply_parser.add_argument("--stow-options", help="Space-separated GNU Stow options")
+    apply_parser.add_argument("--templates", action="store_true", help="Process template files")
+    apply_parser.add_argument("--custom-paths", help="Comma-separated list of custom paths")
+    apply_parser.add_argument("--ignore-rules", action="store_true", help="Ignore discovery rules")
 
-    switch_profile_parser = subparsers.add_parser("switch-profile", help="Switch to a different profile")
-    switch_profile_parser.add_argument("repository_name", type=str, help="Name of the repository")
-    switch_profile_parser.add_argument("profile_name", type=str, help="Name of the profile to switch to")
+    # Manage command
+    manage_parser = subparsers.add_parser("manage", aliases=["-m"], 
+        help="Manage dotfiles (uninstall previous, apply new)")
+    manage_parser.add_argument("repository_name", help="Name of the repository to manage")
+    manage_parser.add_argument("-p", "--profile", help="Profile to use")
+    manage_parser.add_argument("-t", "--target-packages", help="Comma-separated list of packages to configure")
+    manage_parser.add_argument("--stow-options", help="Space-separated GNU Stow options")
 
-    # Clone Repository command
-    clone_parser = subparsers.add_parser("clone", aliases=["-S"], help="Clone a dotfiles repository")
-    clone_parser.add_argument("repository_url", type=str, help="URL of the repository to clone")
-
-    # Apply dotfiles command
-    apply_parser = subparsers.add_parser("apply", aliases=["-A"], help="Apply dotfiles from a local repository")
+    # Profile commands
+    profile_parser = subparsers.add_parser("profile", help="Profile management commands")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
     
-    apply_parser.add_argument(
-    "repository_name", type=lambda s: s.split(","), default=[], 
-    help="Name of the repository to apply")
-    apply_parser.add_argument(
-        "--discover-templates", action="store_true",
-        help="Discover all templates recursively in all directories."
-    )
-    apply_parser.add_argument(
-    "--custom-scripts", type=lambda s: s.split(","), default=[],
-    help="List of custom scripts to be discovered, separated by commas"
-    )
-    apply_parser.add_argument(
-    "--custom-rules", type=lambda s: s.split(","), default=[],
-    help="List of custom rules to be discovered, separated by commas"
-    )
-    apply_parser.add_argument(
-    "--stow-options", type=lambda s: s.split(" "), default=[],
-    help="Options for GNU Stow command, separated by spaces"
-    )
-    apply_parser.add_argument(
-    "--target-packages", type=lambda s: s.split(","), default=[],
-    help="List of packages to install only the configs, separated by commas"
-    )
-    apply_parser.add_argument(
-    "--custom-paths", type=lambda s: s.split(","), default=[],
-    help="List of custom paths to be discovered as dotfiles, separated by commas"
-    )
-    apply_parser.add_argument(
-    "--ignore-rules", action="store_true", 
-    help="Ignores the custom rules for discovering dotfiles."
-    )
-    apply_parser.add_argument(
-    "--template-context", type=lambda s: s.split(","),default=[], 
-    help="Path to the json with template variables"
-    )
-    apply_parser.add_argument(
-    "--custom-extras-paths", type=lambda s: s.split(","), default=[],
-    help="List of custom paths to be discovered as extras, separated by commas"
-    )
-    apply_parser.add_argument(
-    "--profile", type=lambda s: s.split(","), default=[], 
-    help="Profile to use for this operation"
-    )
+    list_profile = profile_subparsers.add_parser("list", help="List available profiles")
+    list_profile.add_argument("repository_name", help="Repository name")
+    
+    create_profile = profile_subparsers.add_parser("create", help="Create a new profile")
+    create_profile.add_argument("repository_name", help="Repository name")
+    create_profile.add_argument("profile_name", help="Profile name")
+    
+    switch_profile = profile_subparsers.add_parser("switch", help="Switch to a profile")
+    switch_profile.add_argument("repository_name", help="Repository name")
+    switch_profile.add_argument("profile_name", help="Profile to switch to")
 
-    # Manage dotfiles command
-    manage_parser = subparsers.add_parser("manage", aliases=["-m"], help="Manage dotfiles, uninstalling the previous ones, and applying the new ones")
-    manage_parser.add_argument("repository_name", type=str, help="Name of the repository to manage")
-    manage_parser.add_argument("--discover-templates", action="store_true", help="Discover all templates recursively in all directories.")
-    manage_parser.add_argument("--custom-scripts", type=str, help="List of custom scripts to be discovered, separated with commas")
-    manage_parser.add_argument("--stow-options", type=str, help="Options for GNU Stow command, separated with spaces")
-    manage_parser.add_argument("--target-packages", type=str, help="List of packages to install only the configs, separated with commas")
-    manage_parser.add_argument("--custom-paths", type=str, help="List of custom paths to be discovered as dotfiles, separated with commas")
-    manage_parser.add_argument("--ignore-rules", action="store_true", help="Ignores the custom rules for discovering dotfiles.")
-    manage_parser.add_argument("--template-context", type=str, help="Path to the json with template variables")
-    manage_parser.add_argument("--custom-extras-paths", type=str, help="Path to the JSON with custom extras paths")
-    manage_parser.add_argument("--profile", type=str, help="Profile to use for this operation")
-
-    # Create backup command
-    backup_parser = subparsers.add_parser("backup", aliases=["-b"], help="Create a backup of the applied configuration")
-    backup_parser.add_argument("backup_name", type=str, help="Name of the backup")
-    backup_parser.add_argument("repository_name", type=str, help="Name of the repository to back up")
-
-    # Auto-install command
-    auto_install_parser = subparsers.add_parser("auto-install", help="Automatically install a rice with all dependencies")
-    auto_install_parser.add_argument("path", help="Path to the rice directory")
-    auto_install_parser.add_argument("--force", action="store_true", help="Force installation even if conflicts exist")
-    auto_install_parser.add_argument("--no-deps", action="store_true", help="Skip dependency installation")
-
-    # Global options
-    parser.add_argument("--distro", type=str, help="Specify the distribution to use")
-    parser.add_argument("--aur-helper", type=str, default="paru", choices=["paru", "yay"], help="Specify the AUR helper to use")
-    parser.add_argument("--shell", type=str, default="bash", choices=["bash", "zsh", "fish"], help="Specify the shell to use for the scripts")
+    # Backup commands
+    backup_parser = subparsers.add_parser("backup", help="Backup management commands")
+    backup_subparsers = backup_parser.add_subparsers(dest="backup_command")
+    
+    create_backup = backup_subparsers.add_parser("create", help="Create a backup")
+    create_backup.add_argument("repository_name", help="Repository name")
+    create_backup.add_argument("backup_name", help="Backup name")
+    
+    restore_backup = backup_subparsers.add_parser("restore", help="Restore a backup")
+    restore_backup.add_argument("repository_name", help="Repository name")
+    restore_backup.add_argument("backup_name", help="Backup to restore")
 
     args = parser.parse_args()
-
-    # Initialize logger immediately after parsing arguments
-    logger = setup_logger(args.verbose)
-
+    
     if not args.command:
         parser.print_help()
         sys.exit(1)
-        
-    package_manager = PackageManager(args.verbose, args.aur_helper)
-    dotfile_manager = DotfileManager(args.verbose)
 
-    if args.distro:
-        package_manager.set_package_manager(args.distro)
+    logger = setup_logger(args.verbose)
+    dotfile_manager = DotfileManager(verbose=args.verbose)
+    package_manager = PackageManager(verbose=args.verbose)
 
     try:
-        if args.command == "list-profiles":
-            rice_config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
-            if not rice_config:
-                logger.error(f"Repository {args.repository_name} not found")
-                sys.exit(1)
-            profiles = rice_config.get('profiles', {})
-            active_profile = rice_config.get('active_profile', 'default')
-            print_profiles(profiles, active_profile)
-
-        elif args.command == "create-profile":
-            dotfile_manager.config_manager.create_profile(args.repository_name, args.profile_name)
-            logger.info(f"Created new profile: {args.profile_name}")
-
-        elif args.command == "switch-profile":
-            dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile_name)
-            logger.info(f"Switched to profile: {args.profile_name}")
-
-        elif args.command == "clone":
-            if not dotfile_manager.clone_repository(sanitize_url(args.repository_url)):
+        if args.command == "clone":
+            repository_url = sanitize_url(args.repository_url)
+            if dotfile_manager.clone_repository(repository_url):
+                logger.info(f"Successfully cloned repository: {repository_url}")
+            else:
+                logger.error(f"Failed to clone repository: {repository_url}")
                 sys.exit(1)
 
-        elif args.command == "manage":
-            if args.shell:
-                dotfile_manager.config_manager.set_rice_config(args.repository_name, 'script_config', {'shell': args.shell})
-            if args.custom_extras_paths:
-                try:
-                    with open(args.custom_extras_paths, 'r') as f:
-                        custom_extras_paths = json.load(f)
-                        dotfile_manager.config_manager.set_rice_config(args.repository_name, 'custom_extras_paths', custom_extras_paths)
-                except Exception as e:
-                    logger.error(f"Error loading custom extras paths: {e}")
-                    sys.exit(1)
-            if args.profile:
-                dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
-            if not _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
-                sys.exit(1)
-            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=True)
+        elif args.command in ["apply", "manage"]:
+            is_manage = args.command == "manage"
+            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, is_manage)
+
+        elif args.command == "profile":
+            if args.profile_command == "list":
+                profiles = dotfile_manager.config_manager.get_rice_config(args.repository_name).get("profiles", {})
+                active_profile = dotfile_manager.config_manager.get_active_profile(args.repository_name)
+                print_profiles(profiles, active_profile)
+            
+            elif args.profile_command == "create":
+                dotfile_manager.config_manager.create_profile(args.repository_name, args.profile_name)
+                logger.info(f"Created profile '{args.profile_name}' for repository '{args.repository_name}'")
+            
+            elif args.profile_command == "switch":
+                dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile_name)
+                logger.info(f"Switched to profile '{args.profile_name}' for repository '{args.repository_name}'")
 
         elif args.command == "backup":
-            if not dotfile_manager.create_backup(args.repository_name, args.backup_name):
-                sys.exit(1)
+            if args.backup_command == "create":
+                dotfile_manager.create_backup(args.repository_name, args.backup_name)
+                logger.info(f"Created backup '{args.backup_name}' for repository '{args.repository_name}'")
+            
+            elif args.backup_command == "restore":
+                dotfile_manager.restore_backup(args.repository_name, args.backup_name)
+                logger.info(f"Restored backup '{args.backup_name}' for repository '{args.repository_name}'")
 
-        elif args.command == "apply":
-            if args.profile:
-                dotfile_manager.config_manager.switch_profile(args.repository_name, args.profile)
-            if not _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
-                sys.exit(1)
-            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
-
-        elif args.command == "auto-install":
-            try:
-                dotfile_manager = DotfileManager(verbose=args.verbose)
-                logger.info(f"{Fore.CYAN}Starting automated rice installation from: {args.path}{Style.RESET_ALL}")
-                
-                if not os.path.isdir(args.path):
-                    logger.error(f"{Fore.RED}Error: {args.path} is not a valid directory{Style.RESET_ALL}")
-                    sys.exit(1)
-                    
-                success = dotfile_manager.apply_rice_automated(args.path)
-                
-                if success:
-                    logger.info(f"{Fore.GREEN}Rice installation completed successfully!{Style.RESET_ALL}")
-                else:
-                    logger.error(f"{Fore.RED}Rice installation failed. Check logs for details.{Style.RESET_ALL}")
-                    sys.exit(1)
-                    
-            except Exception as e:
-                logger.error(f"{Fore.RED}Error during automated installation: {str(e)}{Style.RESET_ALL}")
-                sys.exit(1)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 def _handle_nix_rice_installation(args, dotfile_manager, package_manager, logger):
@@ -245,40 +179,11 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
             custom_paths = args.custom_paths.split(",")
         else:
             custom_paths = None
-        if args.template_context:
-            try:
-                with open(args.template_context, 'r') as f:
-                    template_context = json.load(f)
-            except Exception as e:
-                logger.error(f"Error loading template context: {e}")
-                sys.exit(1)
-        else:
-            template_context = {}
-        if args.custom_scripts:
-            custom_scripts = args.custom_scripts.split(",")
-        else:
-            custom_scripts = None
         if manage:
-            if not dotfile_manager.manage_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules, template_context, args.discover_templates, custom_scripts):
+            if not dotfile_manager.manage_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules):
                 sys.exit(1)
         else:
-            if args.skip_packages:
-                skip_packages = args.skip_packages.split(",")
-            else:
-                skip_packages = []
-            rice_config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
-            if not rice_config:
-                logger.error(f"No configuration found for repository: {args.repository_name}")
-                sys.exit(1)
-            dependencies = rice_config.get('dependencies', [])
-            packages_to_install = [package for package in dependencies if package not in skip_packages]
-            if not package_manager.install(packages_to_install, local_dir=rice_config.get('local_directory')):
-                sys.exit(1)
-            if args.overwrite_sym:
-                overwrite_sym = args.overwrite_sym.split(",")
-            else:
-                overwrite_sym = None
-            if not dotfile_manager.apply_dotfiles(args.repository_name, stow_options, package_manager, target_packages, overwrite_sym, custom_paths, args.ignore_rules, template_context, args.discover_templates, custom_scripts):
+            if not dotfile_manager.apply_dotfiles(args.repository_name, stow_options, package_manager, target_packages, custom_paths, args.ignore_rules):
                 sys.exit(1)
     except Exception as e:
         logger.error(f"An error occurred in command: {args.command}. Error: {e}")

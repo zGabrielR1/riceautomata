@@ -1,40 +1,6 @@
 # RiceAutomata
 
-A powerful dotfile and system configuration manager designed to automate the process of setting up and managing your Linux/Unix system configurations.
-
-## Features
-
-### Core Features
-- **Automated Dotfile Management**: Seamlessly manage and deploy your dotfiles across different systems
-- **Multi-Profile Support**: Create and manage different configuration profiles for various environments
-- **Package Management**: 
-  - Automatic package installation and management
-  - Support for multiple package managers (pacman, apt, dnf, zypper, pip, npm, cargo)
-  - Nix package manager integration
-  - Parallel package installation for improved performance
-
-### Asset Management
-- **Asset Processing**: Automated handling of fonts, icons, and other assets
-- **Permission Management**: Proper file permission handling during deployment
-- **Directory Structure**: Maintains correct directory hierarchies
-
-### Configuration Features
-- **Format Support**: Handle multiple configuration file formats:
-  - JSON
-  - YAML
-  - TOML
-  - Plain text
-- **Template Support**: Use Jinja2 templates for dynamic configuration files
-- **Backup System**: Create and manage backups of your configurations
-
-### Advanced Features
-- **Profile Management**: 
-  - Environment-specific configurations
-  - Profile-specific package sets
-  - Custom asset management per profile
-- **Dependency Resolution**: Automatic detection and installation of dependencies
-- **Error Handling**: Robust error handling with detailed logging
-- **Rollback Support**: Safely rollback changes if something goes wrong
+A powerful command-line tool for managing dotfiles and system configurations on Linux/Unix systems.
 
 ## Installation
 
@@ -45,70 +11,86 @@ cd riceautomata
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Make the command available system-wide
+pip install -e .
 ```
 
 ## Usage
 
-### Basic Usage
+RiceAutomata provides a simple command-line interface for managing your dotfiles:
 
-```python
-from src.dotfile import DotfileManager
-
-# Initialize the manager
-manager = DotfileManager(verbose=True)
+```bash
+# Clone a dotfiles repository
+riceautomata clone https://github.com/user/dotfiles
 
 # Apply dotfiles from a repository
-manager.apply_dotfiles(
-    repository_name="my-dotfiles",
-    stow_options=[],
-    package_manager="pacman"
-)
+riceautomata apply my-dotfiles
+
+# Apply dotfiles with a specific profile
+riceautomata apply my-dotfiles -p minimal
+
+# Manage dotfiles (uninstall previous, apply new)
+riceautomata manage my-dotfiles --target-packages i3,polybar
+
+# List available profiles
+riceautomata profile list my-dotfiles
+
+# Create a new profile
+riceautomata profile create my-dotfiles work
+
+# Switch to a different profile
+riceautomata profile switch my-dotfiles work
+
+# Create a backup
+riceautomata backup create my-dotfiles backup-name
+
+# Restore from backup
+riceautomata backup restore my-dotfiles backup-name
 ```
 
-### Profile Management
+### Command Options
 
-```python
-# Create and manage profiles
-profiles = {
-    "work": {
-        "packages": ["vim", "tmux", "git"],
-        "config": {
-            "target_dir": "~/.config",
-            "files": {
-                "vim/vimrc": {"settings": "work-specific-settings"}
-            }
-        }
-    },
-    "home": {
-        "packages": ["neovim", "alacritty"],
-        "assets": "~/dotfiles/assets"
-    }
-}
+#### Global Options
+- `-v, --verbose`: Enable verbose output
 
-manager._manage_profiles(profiles)
-```
+#### Apply/Manage Options
+- `-p, --profile`: Specify profile to use
+- `-t, --target-packages`: Comma-separated list of packages to configure
+- `--stow-options`: Space-separated GNU Stow options
+- `--templates`: Process template files
+- `--custom-paths`: Comma-separated list of custom paths
+- `--ignore-rules`: Ignore discovery rules
 
-### Package Management
+## Features
 
-```python
-# Install packages from a list
-packages = ["neovim", "tmux", "zsh"]
-manager._install_packages(packages)
+### Core Features
+- **Command-Line Interface**: Simple and intuitive CLI for all operations
+- **Profile Management**: Create and switch between different configuration profiles
+- **Package Management**: 
+  - Automatic package installation
+  - Support for multiple package managers
+  - Nix integration
+- **Backup System**: Create and restore configuration backups
 
-# Read and install packages from a file
-manager._read_package_list("packages.yaml")
-```
+### Asset Management
+- Automated handling of fonts and icons
+- Proper permission management
+- Directory structure preservation
 
-## Configuration
+### Configuration
+- Support for multiple formats (JSON, YAML, TOML)
+- Template system using Jinja2
+- Flexible profile configurations
 
-### Directory Structure
+## Directory Structure
 ```
 ~/.config/rice-automata/
 ├── config.json         # Main configuration file
 └── managed-rices/     # Directory containing managed rice configurations
 ```
 
-### Configuration File Format
+## Configuration Format
 ```json
 {
     "repository_name": {
@@ -133,20 +115,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
-
-- GNU Stow for symlink management
-- All the package managers that make this possible
-- The dotfile community for inspiration
-
 ## Changelog
 
 ### Latest Changes
-- Added profile management system
-- Implemented parallel package installation
-- Added support for multiple package managers
-- Improved asset management
-- Enhanced error handling and logging
-- Added backup and rollback functionality
-- Added template support for configuration files
-- Improved dependency resolution
+- Improved CLI interface with better command organization
+- Added profile management commands
+- Enhanced backup and restore functionality
+- Improved error handling and logging
+- Added template support
+- Enhanced dependency resolution
