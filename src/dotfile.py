@@ -37,20 +37,28 @@ class DotfileTree:
             r'^\.',  # Traditional dot files
             r'^dot_',  # Chezmoi style
             r'\.conf$',  # Configuration files
-            r'\.toml$',
-            r'\.yaml$',
-            r'\.yml$',
-            r'\.json$',
+            r'\.toml$', r'\.yaml$', r'\.yml$', r'\.json$',
             r'rc$',  # rc files
             r'config$',  # config files
             r'\.nix$',  # Nix configuration files
-            r'flake\.nix$'  # Nix flakes
+            r'flake\.nix$',  # Nix flakes
+            r'\.ini$',  # INI configs
+            r'\.ron$',  # RON configs
+            r'\.css$',  # Style files
+            r'\.scss$',  # SASS files
+            r'\.js$',  # JavaScript configs (like for ags)
+            r'\.ts$'  # TypeScript configs
         ]
         self.known_config_dirs = {
-            'nvim', 'alacritty', 'hypr', 'waybar', 'sway', 'i3',
-            'polybar', 'kitty', 'rofi', 'dunst', 'picom', 'gtk-3.0',
-            'gtk-4.0', 'zsh', 'bash', 'fish', 'tmux', 'neofetch',
-            'fastfetch', 'eww', 'wezterm'
+            'nvim', 'alacritty', 'hypr', 'waybar', 'sway', 'i3', 'polybar', 'kitty',
+            'rofi', 'dunst', 'picom', 'gtk-3.0', 'gtk-4.0', 'zsh', 'bash', 'fish',
+            'tmux', 'neofetch', 'fastfetch', 'eww', 'wezterm', 'ags', 'anyrun',
+            'foot', 'fuzzel', 'mpv', 'qt5ct', 'wlogout', 'fontconfig', 'swaylock',
+            'hyprlock', 'hypridle'
+        }
+        self.asset_dirs = {
+            'wallpapers', 'backgrounds', 'icons', 'themes', 'fonts', 'assets',
+            'styles', 'shaders', 'images'
         }
 
     def build_tree(self, root_path: str) -> DotfileNode:
@@ -61,12 +69,18 @@ class DotfileTree:
         return root
 
     def _is_dotfile(self, path: str) -> bool:
-        """Check if a file or directory is a dotfile/config"""
+        """Enhanced check if a file or directory is a dotfile/config"""
         name = os.path.basename(path)
-
+        
         # Check if it's a known config directory
-        if os.path.isdir(path) and name.lower() in self.known_config_dirs:
-            return True
+        if os.path.isdir(path):
+            if name.lower() in self.known_config_dirs:
+                return True
+            if name.lower() in self.asset_dirs:
+                return True
+            # Check for nested config structures (like .config/something)
+            if os.path.basename(os.path.dirname(path)) == '.config':
+                return True
 
         # Check against patterns
         for pattern in self.dotfile_patterns:
@@ -148,6 +162,22 @@ class DotfileTree:
         for child in node.children:
             self.find_dependencies(child)
 
+    def _categorize_dotfile_directory(self, path: str) -> str:
+        """Categorize the type of dotfile directory"""
+        name = os.path.basename(path).lower()
+        
+        if name in self.asset_dirs:
+            return "asset"
+        if name in {'bin', 'scripts', 'scriptdata'}:
+            return "script"
+        if name in {'themes', 'styles', 'gtk-3.0', 'gtk-4.0'}:
+            return "theme"
+        if name in self.known_config_dirs:
+            return "config"
+        if 'nix' in name or name.endswith('.nix'):
+            return "nix"
+            
+        return "other"
 
 class DotfileManager:
 
@@ -381,22 +411,6 @@ class DotfileManager:
         content_score = self._score_dotfile_content(dir_path)
         return name_score + content_score >= 2
 
-    def _categorize_dotfile_directory(self, dir_path):
-        dir_name = os.path.basename(dir_path)
-
-        if dir_name in ["wallpapers", "wallpaper", "backgrounds"]:
-           return "wallpaper"
-        elif dir_name in ["scripts", "bin"]:
-          return "script"
-        elif dir_name in ["icons", "cursors"]:
-            return "icon"
-        elif dir_name == "cache":
-           return "cache"
-        elif dir_name == ".local":
-           return "local"
-        else:
-           return "config"
-
     def _discover_dotfile_directories(self, local_dir, target_packages = None, custom_paths = None, ignore_rules = False):
         dotfile_dirs = {}
         paths_to_check = []
@@ -553,27 +567,40 @@ class DotfileManager:
             self.logger.debug(f"Font: {font_name} is already installed")
       return True
 
-    def _apply_nix_config(self, local_dir, package_manager):
-       if not package_manager.nix_installed:
-            if not package_manager._install_nix():
-                self.logger.error("Nix is required, and failed to install. Aborting.")
-                return False
-       self.logger.info("Applying nix configuration.")
-       try:
-        nix_apply_command = ["nix", "build", ".#system", "--print-out-paths"]
-        nix_apply_result = self.script_runner._run_command(nix_apply_command, cwd = local_dir)
-        if not nix_apply_result:
-           return False
-        profile_path = nix_apply_result.stdout.strip()
-        nix_switch_command = ["sudo", "nix-env", "-p", "/nix/var/nix/profiles/system", "-i", profile_path]
-        switch_result = self.script_runner._run_command(nix_switch_command)
-        if not switch_result:
-            return False
-        return True
-
-       except Exception as e:
-         self.logger.error(f"Error applying nix configuration: {e}")
-         return False
+    def _apply_nix_config(self, nix_path: str):
+        """Apply Nix configuration"""
+        try:
+            if os.path.isfile(nix_path) and nix_path.endswith('flake.nix'):
+                # Handle flake.nix
+                target_dir = os.path.expanduser("~/.config/nixos")
+                os.makedirs(target_dir, exist_ok=True)
+                self._create_symlink(nix_path, os.path.join(target_dir, "flake.nix"))
+                
+                # Copy flake.lock if it exists
+                lock_path = os.path.join(os.path.dirname(nix_path), "flake.lock")
+                if os.path.exists(lock_path):
+                    self._create_symlink(lock_path, os.path.join(target_dir, "flake.lock"))
+            else:
+                # Handle other Nix configs
+                target_dir = os.path.expanduser("~/.config/nixpkgs")
+                os.makedirs(target_dir, exist_ok=True)
+                
+                if os.path.isdir(nix_path):
+                    for root, _, files in os.walk(nix_path):
+                        for file in files:
+                            if file.endswith('.nix'):
+                                src_file = os.path.join(root, file)
+                                rel_path = os.path.relpath(root, nix_path)
+                                target = os.path.join(target_dir, rel_path)
+                                os.makedirs(target, exist_ok=True)
+                                self._create_symlink(src_file, os.path.join(target, file))
+                else:
+                    self._create_symlink(nix_path, os.path.join(target_dir, os.path.basename(nix_path)))
+                
+            self.logger.info(f"Applied Nix configuration from {nix_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to apply Nix configuration: {e}")
+            raise FileOperationError(f"Failed to apply Nix configuration: {e}")
 
     def _apply_directory_with_stow(self, local_dir, directory, stow_options=[], overwrite_destination=None):
         if overwrite_destination:
@@ -1586,147 +1613,54 @@ class DotfileManager:
             self._rollback_changes()
             return False
 
-class ConfigManager:
-    def __init__(self):
-        self.config_dir = os.path.join(os.path.expanduser("~"), ".config", "rice-automata")
-        self.managed_rices_dir = os.path.join(os.path.expanduser("~"), ".config", "managed-rices")
-        self.config_file = os.path.join(self.config_dir, "config.json")
-        self.config_data = self._load_config()
-        self.logger = setup_logger()
+    def _apply_config_directory(self, rice_path: str, directory: str):
+        """Apply configuration directory with enhanced handling"""
+        src = os.path.join(rice_path, directory)
+        category = self._categorize_dotfile_directory(src)
+        
+        if category == "asset":
+            # Handle assets (wallpapers, icons, etc.)
+            target_dir = os.path.expanduser(f"~/.local/share/{os.path.basename(src)}")
+            os.makedirs(target_dir, exist_ok=True)
+            self._copy_assets(src, target_dir)
+        elif category == "theme":
+            # Handle themes and styles
+            self._apply_theme_directory(src)
+        elif category == "nix":
+            # Handle Nix configurations
+            self._apply_nix_config(src)
+        else:
+            # Default config handling
+            target = os.path.expanduser(f"~/.config/{os.path.basename(src)}")
+            self._create_symlink(src, target)
 
-    def _load_config(self):
-        """Load the main configuration file."""
-        os.makedirs(self.config_dir, exist_ok=True)
-        if not os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'w') as f:
-                    json.dump({'rices': {}}, f, indent=4)
-            except Exception as e:
-                self.logger.error(f"Error creating default config file: {e}")
-                return {'rices': {}}
-            return {'rices': {}}
+    def _copy_assets(self, src_dir: str, target_dir: str):
+        """Copy asset files while preserving structure"""
         try:
-            with open(self.config_file, 'r') as f:
-                return json.load(f)
+            for root, _, files in os.walk(src_dir):
+                rel_path = os.path.relpath(root, src_dir)
+                target_path = os.path.join(target_dir, rel_path)
+                os.makedirs(target_path, exist_ok=True)
+                
+                for file in files:
+                    src_file = os.path.join(root, file)
+                    target_file = os.path.join(target_path, file)
+                    shutil.copy2(src_file, target_file)
+                    
+            self.logger.info(f"Copied assets from {src_dir} to {target_dir}")
         except Exception as e:
-            self.logger.error(f"Error loading config file: {e}")
-            return {'rices': {}}
+            self.logger.error(f"Failed to copy assets: {e}")
+            raise FileOperationError(f"Failed to copy assets: {e}")
 
-    def _save_config(self):
-        """Save the main configuration data to the file."""
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump(self.config_data, f, indent=4)
-        except Exception as e:
-            self.logger.error(f"Error saving config file: {e}")
-
-    def get_rice_config(self, repository_name):
-        """Retrieve the configuration for a given rice repository."""
-        return self.config_data['rices'].get(repository_name)
-
-    def add_rice_config(self, repository_name, config):
-        """Add or update the configuration for a given rice repository."""
-        self.config_data['rices'][repository_name] = config
-        self._save_config()
-
-    def remove_rice_config(self, repository_name):
-        """Remove the configuration for a given rice repository."""
-        if repository_name in self.config_data['rices']:
-            del self.config_data['rices'][repository_name]
-            self._save_config()
-
-    def list_rices(self):
-        """List all managed rices."""
-        return list(self.config_data['rices'].keys())
-
-    def _generate_config_from_structure(self, repository_name):
-        """Generate a configuration based on the repository structure."""
-        repo_path = os.path.join(self.managed_rices_dir, repository_name)
-        if not os.path.exists(repo_path):
-            self.logger.error(f"Repository path does not exist: {repo_path}")
-            return None
-
-        config = {
-            'repository_url': '',  # Will be updated if cloned
-            'local_directory': repo_path,
-            'profiles': {
-                'default': {
-                    'dotfile_directories': {},
-                    'dependencies': [],
-                    'script_config': {
-                        'pre_clone': [],
-                        'post_clone': [],
-                        'pre_install_dependencies': [],
-                        'post_install_dependencies': [],
-                        'pre_apply': [],
-                        'post_apply': [],
-                        'pre_uninstall': [],
-                        'post_uninstall': [],
-                        'shell': "bash"
-                    },
-                    'custom_extras_paths': {}
-                }
-            },
-            'active_profile': 'default',
-            'applied': False,
-            'timestamp': create_timestamp(),
-            'nix_config': False
-        }
-
-        # Discover dotfile directories (basic)
-        dotfile_dirs = self._discover_initial_dotfile_directories(repo_path)
-        config['profiles']['default']['dotfile_directories'] = dotfile_dirs
-
-        # Discover initial dependencies (basic)
-        dependencies = self._discover_initial_dependencies(repo_path)
-        config['profiles']['default']['dependencies'] = dependencies
-
-        return config
-
-    def _discover_initial_dotfile_directories(self, repo_path):
-        """Basic discovery of dotfile directories."""
-        dotfile_dirs = {}
-        for item in os.listdir(repo_path):
-            item_path = os.path.join(repo_path, item)
-            if os.path.isdir(item_path):
-                if item.lower() in ['nvim', 'alacritty', 'hypr', 'waybar', 'sway', 'i3', 'zsh', 'bash', 'fish', 'gtk-3.0', 'gtk-4.0', 'kitty', 'rofi', 'dunst', 'picom', 'polybar', 'tmux', 'neofetch', 'fastfetch', 'eww', 'wezterm']:
-                    dotfile_dirs[item] = 'config'
-                elif item.lower() in ['wallpapers', 'wallpaper', 'backgrounds']:
-                    dotfile_dirs[item] = 'wallpaper'
-                elif item.lower() in ['scripts', 'bin']:
-                    dotfile_dirs[item] = 'script'
-        return dotfile_dirs
-
-    def _discover_initial_dependencies(self, repo_path):
-        """Basic discovery of dependencies from common files."""
-        dependencies = set()
-        dep_files = ['requirements.txt', 'package.json', 'Cargo.toml']
-        for file in dep_files:
-            file_path = os.path.join(repo_path, file)
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, 'r') as f:
-                        content = f.read().lower()
-                        if file == 'package.json':
-                            try:
-                                data = json.load(f)
-                                dependencies.update(data.get('dependencies', {}).keys())
-                                dependencies.update(data.get('devDependencies', {}).keys())
-                            except json.JSONDecodeError:
-                                pass
-                        elif file == 'Cargo.toml':
-                            try:
-                                import toml
-                                data = toml.load(f)
-                                if 'dependencies' in data:
-                                    dependencies.update(data['dependencies'].keys())
-                            except ImportError:
-                                pass
-                            except toml.TomlDecodeError:
-                                pass
-                        else:
-                            deps = re.findall(r'[\w-]+', content)
-                            dependencies.update(deps)
-                except Exception as e:
-                    self.logger.warning(f"Error reading dependency file {file}: {e}")
-        return list(dependencies)
+    def _apply_theme_directory(self, theme_dir: str):
+        """Apply theme configurations"""
+        name = os.path.basename(theme_dir).lower()
+        
+        if name in {'gtk-3.0', 'gtk-4.0'}:
+            target = os.path.expanduser(f"~/.config/{name}")
+        else:
+            # Handle other theme types
+            target = os.path.expanduser("~/.local/share/themes")
+            
+        os.makedirs(target, exist_ok=True)
+        self._create_symlink(theme_dir, target)
