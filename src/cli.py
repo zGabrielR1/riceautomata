@@ -9,6 +9,8 @@ import os
 import json
 from typing import Dict, Any
 from colorama import init, Fore, Style
+import datetime
+import shutil
 
 init()  # Initialize colorama for colored output
 
@@ -106,6 +108,20 @@ Examples:
     restore_backup = backup_subparsers.add_parser("restore", help="Restore a backup")
     restore_backup.add_argument("repository_name", help="Repository name")
     restore_backup.add_argument("backup_name", help="Backup to restore")
+
+    # Export command
+    export_parser = subparsers.add_parser("export", help="Export configuration to a portable format")
+    export_parser.add_argument("repository_name", help="Name of the repository to export")
+    export_parser.add_argument("-o", "--output", help="Output file path (default: rice-export.json)")
+    export_parser.add_argument("--include-deps", action="store_true", help="Include dependency information")
+    export_parser.add_argument("--include-assets", action="store_true", help="Include asset information")
+
+    # Import command
+    import_parser = subparsers.add_parser("import", help="Import configuration from a file")
+    import_parser.add_argument("file", help="Path to the exported configuration file")
+    import_parser.add_argument("-n", "--name", help="Name for the imported configuration")
+    import_parser.add_argument("--skip-deps", action="store_true", help="Skip dependency installation")
+    import_parser.add_argument("--skip-assets", action="store_true", help="Skip asset installation")
 
     args = parser.parse_args()
     
@@ -320,6 +336,119 @@ Examples:
             elif args.backup_command == "restore":
                 dotfile_manager.restore_backup(args.repository_name, args.backup_name)
                 logger.info(f"Restored backup '{args.backup_name}' for repository '{args.repository_name}'")
+
+        elif args.command == "export":
+            logger.info(f"Exporting configuration for repository: {args.repository_name}")
+            
+            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+            if not config:
+                logger.error(f"No configuration found for repository: {args.repository_name}")
+                sys.exit(1)
+            
+            # Create export data structure
+            export_data = {
+                "name": args.repository_name,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "config": config,
+                "profiles": {},
+                "dependencies": {},
+                "assets": {}
+            }
+            
+            # Export profiles
+            profiles = config.get("profiles", {})
+            for profile_name, profile_data in profiles.items():
+                export_data["profiles"][profile_name] = profile_data
+            
+            # Export dependencies if requested
+            if args.include_deps:
+                dotfile_dirs = dotfile_manager._discover_dotfile_directories(
+                    config.get("local_directory", "")
+                )
+                dependencies = dotfile_manager._discover_dependencies(
+                    config.get("local_directory", ""),
+                    dotfile_dirs
+                )
+                export_data["dependencies"] = dependencies
+            
+            # Export assets if requested
+            if args.include_assets:
+                assets = {}
+                asset_dirs = ["wallpapers", "icons", "fonts", "themes"]
+                for asset_dir in asset_dirs:
+                    dir_path = os.path.join(config.get("local_directory", ""), asset_dir)
+                    if os.path.exists(dir_path):
+                        assets[asset_dir] = []
+                        for root, _, files in os.walk(dir_path):
+                            for file in files:
+                                rel_path = os.path.relpath(
+                                    os.path.join(root, file),
+                                    dir_path
+                                )
+                                assets[asset_dir].append(rel_path)
+                export_data["assets"] = assets
+            
+            # Save export data
+            output_file = args.output or "rice-export.json"
+            try:
+                with open(output_file, "w") as f:
+                    json.dump(export_data, f, indent=2)
+                logger.info(f"Successfully exported configuration to: {output_file}")
+            except Exception as e:
+                logger.error(f"Failed to export configuration: {e}")
+                sys.exit(1)
+
+        elif args.command == "import":
+            logger.info(f"Importing configuration from: {args.file}")
+            
+            try:
+                with open(args.file, "r") as f:
+                    import_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to read import file: {e}")
+                sys.exit(1)
+            
+            # Validate import data
+            required_keys = ["name", "config"]
+            if not all(key in import_data for key in required_keys):
+                logger.error("Invalid import file format")
+                sys.exit(1)
+            
+            # Use provided name or original name
+            repo_name = args.name or import_data["name"]
+            
+            # Create configuration
+            config = import_data["config"]
+            dotfile_manager.config_manager.add_rice_config(repo_name, config)
+            
+            # Import profiles
+            if "profiles" in import_data:
+                for profile_name, profile_data in import_data["profiles"].items():
+                    dotfile_manager.config_manager.create_profile(repo_name, profile_name)
+                    dotfile_manager.config_manager.update_profile(repo_name, profile_name, profile_data)
+            
+            # Install dependencies if included and not skipped
+            if "dependencies" in import_data and not args.skip_deps:
+                dependencies = import_data["dependencies"]
+                if dependencies:
+                    logger.info("Installing dependencies...")
+                    dotfile_manager._install_packages(dependencies)
+            
+            # Process assets if included and not skipped
+            if "assets" in import_data and not args.skip_assets:
+                assets = import_data["assets"]
+                if assets:
+                    logger.info("Processing assets...")
+                    for asset_type, asset_files in assets.items():
+                        target_dir = os.path.expanduser(f"~/.local/share/{asset_type}")
+                        os.makedirs(target_dir, exist_ok=True)
+                        for asset_file in asset_files:
+                            src = os.path.join(config.get("local_directory", ""), asset_type, asset_file)
+                            dst = os.path.join(target_dir, os.path.basename(asset_file))
+                            if os.path.exists(src):
+                                shutil.copy2(src, dst)
+            
+            logger.info(f"Successfully imported configuration as: {repo_name}")
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")
