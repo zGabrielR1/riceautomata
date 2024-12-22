@@ -18,6 +18,7 @@ import toml
 import yaml
 import asyncio
 import shutil
+import math
 
 logger = setup_logger()
 
@@ -360,56 +361,221 @@ class DotfileManager:
             raise
 
     def _score_dir_name(self, dir_name):
+        """
+        Score a directory name based on how likely it is to contain dotfiles.
+        Returns a tuple of (score, metadata) where metadata contains additional context.
+        """
         score = 0
+        metadata = {
+            "category": None,
+            "confidence": "low",
+            "matched_rules": []
+        }
+
+        # Common dotfile directory patterns
+        known_config_dirs = {
+            # Desktop Environment / Window Manager configs
+            "hypr": ("de/wm", 4), "sway": ("de/wm", 4), "i3": ("de/wm", 4),
+            "awesome": ("de/wm", 4), "bspwm": ("de/wm", 4), "dwm": ("de/wm", 4),
+            "xmonad": ("de/wm", 4), "qtile": ("de/wm", 4), "openbox": ("de/wm", 4),
+            
+            # Status bars and widgets
+            "waybar": ("statusbar", 4), "polybar": ("statusbar", 4), 
+            "eww": ("widgets", 4), "ags": ("widgets", 4),
+            
+            # Terminal emulators
+            "alacritty": ("terminal", 4), "kitty": ("terminal", 4), 
+            "wezterm": ("terminal", 4), "foot": ("terminal", 4),
+            
+            # Shell configurations
+            "zsh": ("shell", 4), "bash": ("shell", 4), "fish": ("shell", 4),
+            
+            # Text editors and IDEs
+            "nvim": ("editor", 4), "vim": ("editor", 4), "emacs": ("editor", 4),
+            "vscode": ("editor", 4), "code": ("editor", 4),
+            
+            # System utilities
+            "dunst": ("notification", 3), "rofi": ("launcher", 3),
+            "picom": ("compositor", 3), "sxhkd": ("hotkeys", 3),
+            
+            # Theming and appearance
+            "gtk-2.0": ("theme", 3), "gtk-3.0": ("theme", 3), "gtk-4.0": ("theme", 3),
+            "themes": ("theme", 3), "icons": ("theme", 3), "fonts": ("theme", 3),
+            
+            # Common config directories
+            "config": ("general", 2), ".config": ("general", 3),
+            
+            # Development tools
+            "git": ("dev", 2), "npm": ("dev", 2), "yarn": ("dev", 2),
+            "cargo": ("dev", 2), "pip": ("dev", 2)
+        }
+
+        # Check against known config directories
+        if dir_name in known_config_dirs:
+            category, points = known_config_dirs[dir_name]
+            score += points
+            metadata["category"] = category
+            metadata["matched_rules"].append(f"known_config_dir:{dir_name}")
+            metadata["confidence"] = "high" if points >= 4 else "medium"
+
+        # Check custom rules from config
         for rule in self.rules_config.get('rules', []):
             if rule.get('regex'):
                 try:
                     if re.search(rule['regex'], dir_name):
                         score += 3
+                        metadata["matched_rules"].append(f"custom_rule:{rule['regex']}")
                 except Exception as e:
-                    self.logger.error(f"Error with rule regex: {rule['regex']}. Check your rules.json file. Error: {e}")
+                    self.logger.error(f"Error with rule regex: {rule['regex']}. Error: {e}")
             elif dir_name == rule.get('name'):
                 score += 3
+                metadata["matched_rules"].append(f"custom_rule_name:{rule['name']}")
 
-        de_wm_names = [
-            "nvim", "zsh", "hypr", "waybar", "alacritty", "dunst", "rofi", "sway",
-            "gtk-3.0", "fish", "kitty", "i3", "bspwm", "awesome", "polybar", "picom",
-            "qtile", "xmonad", "openbox", "dwm", "eww", "wezterm", "foot", "ags"
-        ]
-        if dir_name in de_wm_names:
+        # Common naming patterns
+        if dir_name.startswith('.'):
             score += 2
-        return score
+            metadata["matched_rules"].append("dotfile_prefix")
+        elif dir_name.startswith('dot-'):
+            score += 2
+            metadata["matched_rules"].append("dot_prefix")
+        elif dir_name.endswith('rc'):
+            score += 2
+            metadata["matched_rules"].append("rc_suffix")
+        elif dir_name.endswith('config'):
+            score += 2
+            metadata["matched_rules"].append("config_suffix")
+
+        # Update confidence based on final score
+        if score >= 4:
+            metadata["confidence"] = "high"
+        elif score >= 2:
+            metadata["confidence"] = "medium"
+
+        return score, metadata
 
     def _score_dotfile_content(self, dir_path):
+        """
+        Score directory contents based on how likely they are to be dotfiles.
+        Returns a tuple of (score, metadata) where metadata contains detailed analysis.
+        """
         score = 0
-        dotfile_extensions = [".conf", ".toml", ".yaml", ".yml", ".json", ".config",
-                            ".sh", ".bash", ".zsh", ".fish", ".lua", ".vim", ".el", ".ini", ".ron", ".scss", ".js", ".xml"]
-        config_keywords = [
-            "nvim", "hyprland", "waybar", "zsh", "alacritty", "dunst", "rofi",
-            "sway", "gtk", "fish", "kitty", "config", "theme", "colorscheme",
-            "keybind", "workspace", "window", "border", "font", "opacity", "ags"
-        ]
+        metadata = {
+            "file_types": {},
+            "config_matches": [],
+            "potential_dependencies": set(),
+            "matched_patterns": set()
+        }
 
-        for item in os.listdir(dir_path):
-            item_path = os.path.join(dir_path, item)
-            if os.path.isfile(item_path):
-                if any(item.endswith(ext) for ext in dotfile_extensions):
-                    score += 1
-                try:
-                    with open(item_path, 'r', errors='ignore') as file:
-                        content = file.read(1024).lower()
-                        for keyword in config_keywords:
-                            if keyword in content:
-                                score += 0.5
-                except:
-                   pass
-        return score
+        # Common configuration file extensions
+        config_extensions = {
+            '.conf': 2, '.config': 2, '.cfg': 2, '.ini': 2,
+            '.json': 1.5, '.yaml': 1.5, '.yml': 1.5, '.toml': 1.5,
+            '.rc': 1.5, '.profile': 1.5
+        }
+
+        # Configuration keywords to look for
+        config_keywords = {
+            "config": 0.5, "settings": 0.5, "preferences": 0.5,
+            "window": 0.3, "workspace": 0.3, "keybind": 0.3,
+            "theme": 0.3, "color": 0.3, "font": 0.3,
+            "alias": 0.3, "export": 0.3, "PATH": 0.3
+        }
+
+        try:
+            for root, dirs, files in os.walk(dir_path):
+                # Skip hidden directories except .config
+                dirs[:] = [d for d in dirs if not d.startswith('.') or d == '.config']
+                
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, dir_path)
+                    
+                    # Track file extension
+                    ext = os.path.splitext(file)[1].lower()
+                    metadata["file_types"][ext] = metadata["file_types"].get(ext, 0) + 1
+
+                    # Score based on extension
+                    if ext in config_extensions:
+                        score += config_extensions[ext]
+                        metadata["matched_patterns"].add(f"extension:{ext}")
+
+                    # Analyze file content if it's a text file and not too large
+                    if ext in config_extensions and os.path.getsize(file_path) < 500000:
+                        try:
+                            with open(file_path, 'r', errors='ignore') as f:
+                                content = f.read(4096).lower()  # Read first 4KB
+                                
+                                # Look for config keywords
+                                for keyword, points in config_keywords.items():
+                                    if keyword in content:
+                                        score += points
+                                        metadata["config_matches"].append(f"{rel_path}:{keyword}")
+
+                                # Look for potential dependencies
+                                if re.search(r'(require|import|use|include)\s+[\'"]([^\'"])+[\'"]', content):
+                                    metadata["potential_dependencies"].add(rel_path)
+                                    score += 0.5
+
+                        except (IOError, UnicodeDecodeError):
+                            continue
+
+        except Exception as e:
+            self.logger.error(f"Error analyzing directory {dir_path}: {e}")
+            return 0, metadata
+
+        # Normalize score based on file count
+        file_count = sum(metadata["file_types"].values())
+        if file_count > 10:
+            score = score / (math.log2(file_count) + 1)
+
+        return score, metadata
 
     def _is_likely_dotfile_dir(self, dir_path):
+        """
+        Determine if a directory is likely to contain dotfiles using enhanced scoring.
+        Returns a tuple of (is_likely, confidence, metadata)
+        """
         dir_name = os.path.basename(dir_path)
-        name_score = self._score_dir_name(dir_name)
-        content_score = self._score_dotfile_content(dir_path)
-        return name_score + content_score >= 2
+        name_score, name_metadata = self._score_dir_name(dir_name)
+        content_score, content_metadata = self._score_dotfile_content(dir_path)
+        
+        total_score = name_score + content_score
+        
+        # Combine metadata
+        metadata = {
+            "name_analysis": name_metadata,
+            "content_analysis": content_metadata,
+            "total_score": total_score,
+            "name_score": name_score,
+            "content_score": content_score
+        }
+        
+        # Determine confidence level
+        if total_score >= 6:
+            confidence = "high"
+        elif total_score >= 3:
+            confidence = "medium"
+        else:
+            confidence = "low"
+            
+        metadata["confidence"] = confidence
+        
+        # Log detailed analysis if verbose
+        if self.verbose:
+            self.logger.debug(f"Dotfile directory analysis for {dir_path}:")
+            self.logger.debug(f"Name score: {name_score} ({name_metadata['confidence']})")
+            self.logger.debug(f"Content score: {content_score}")
+            self.logger.debug(f"Total score: {total_score} ({confidence})")
+            if name_metadata["matched_rules"]:
+                self.logger.debug(f"Matched rules: {', '.join(name_metadata['matched_rules'])}")
+            if content_metadata["matched_patterns"]:
+                self.logger.debug(f"Matched patterns: {len(content_metadata['matched_patterns'])}")
+            if content_metadata["config_matches"]:
+                self.logger.debug(f"Config matches: {len(content_metadata['config_matches'])}")
+            if content_metadata["potential_dependencies"]:
+                self.logger.debug(f"Potential dependencies found in: {len(content_metadata['potential_dependencies'])} files")
+        
+        return total_score >= 2, confidence, metadata
 
     def _discover_dotfile_directories(self, local_dir, target_packages = None, custom_paths = None, ignore_rules = False):
         dotfile_dirs = {}
@@ -441,7 +607,7 @@ class DotfileManager:
                                     category = self._categorize_dotfile_directory(sub_item_path)
                                     dotfile_dirs[os.path.join(rel_path, sub_item)] = category
                     else:
-                        if ignore_rules or self._is_likely_dotfile_dir(item_path):
+                        if ignore_rules or self._is_likely_dotfile_dir(item_path)[0]:
                             category = self._categorize_dotfile_directory(item_path)
                             dotfile_dirs[rel_path] = category
         return dotfile_dirs
@@ -512,10 +678,6 @@ class DotfileManager:
             base_name = os.path.basename(dir_name)
             if base_name in common_deps:
                 dependencies.extend(f"auto:{dep}" for dep in common_deps[base_name])
-
-        for dep, packages in self.dependency_map.get('dependencies', {}).items():
-            if dep in dotfile_dirs or any(dep in dir for dir in dotfile_dirs):
-                dependencies.extend(packages)
 
         arch_packages_dir = os.path.join(local_dir, "arch-packages")
         if os.path.exists(arch_packages_dir) and os.path.isdir(arch_packages_dir):
@@ -625,17 +787,6 @@ class DotfileManager:
       if os.path.basename(directory) != ".config" and not os.path.exists(stow_dir):
           os.makedirs(stow_dir, exist_ok = True)
       return self._apply_directory_with_stow(local_dir, directory, stow_options, overwrite_destination)
-
-    def _overwrite_symlinks(self, target_path, local_dir, directory):
-      dir_path = os.path.join(local_dir, directory)
-      if not os.path.exists(dir_path):
-        self.logger.warning(f"Could not find directory {dir_path} when trying to overwrite")
-        return False
-
-      target_dir = os.path.join(target_path, os.path.basename(directory))
-      if os.path.exists(target_dir):
-        stow_command = ["stow", "-v", "-D", os.path.basename(directory)]
-        self.script_runner._run_command(stow_command, check=False, cwd=local_dir)
 
     def _apply_cache_directory(self, local_dir, directory, stow_options = [], overwrite_destination = None):
         return self._apply_directory_with_stow(local_dir, directory, stow_options, overwrite_destination)
