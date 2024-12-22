@@ -47,6 +47,16 @@ riceautomata backup create my-dotfiles backup-name
 
 # Restore from backup
 riceautomata backup restore my-dotfiles backup-name
+
+# Preview changes before applying
+riceautomata preview my-dotfiles -p minimal
+
+# Show differences between current and new configurations
+riceautomata diff my-dotfiles -p minimal
+
+# Search for configurations
+riceautomata search "polybar" --content  # Search in file contents
+riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 ```
 
 ### Command Options
@@ -61,6 +71,18 @@ riceautomata backup restore my-dotfiles backup-name
 - `--templates`: Process template files
 - `--custom-paths`: Comma-separated list of custom paths
 - `--ignore-rules`: Ignore discovery rules
+
+#### Preview Options
+- `-p, --profile`: Profile to preview
+- `--target-packages`: Comma-separated list of packages to preview
+
+#### Diff Options
+- `-p, --profile`: Profile to compare
+- `--target-packages`: Comma-separated list of packages to compare
+
+#### Search Options
+- `-r, --repository`: Limit search to specific repository
+- `--content`: Search in file contents
 
 ## Features
 
@@ -118,6 +140,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Changelog
 
 ### Latest Changes
+- Added preview command to show changes before applying
+- Added diff command to compare configurations
+- Added search functionality for finding configurations
 - Improved CLI interface with better command organization
 - Added profile management commands
 - Enhanced backup and restore functionality

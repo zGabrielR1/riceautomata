@@ -62,6 +62,24 @@ Examples:
     manage_parser.add_argument("-t", "--target-packages", help="Comma-separated list of packages to configure")
     manage_parser.add_argument("--stow-options", help="Space-separated GNU Stow options")
 
+    # Preview command
+    preview_parser = subparsers.add_parser("preview", help="Preview changes before applying")
+    preview_parser.add_argument("repository_name", help="Name of the repository")
+    preview_parser.add_argument("-p", "--profile", help="Profile to preview")
+    preview_parser.add_argument("--target-packages", help="Comma-separated list of packages to preview")
+
+    # Diff command
+    diff_parser = subparsers.add_parser("diff", help="Show differences between current and new configurations")
+    diff_parser.add_argument("repository_name", help="Name of the repository")
+    diff_parser.add_argument("-p", "--profile", help="Profile to compare")
+    diff_parser.add_argument("--target-packages", help="Comma-separated list of packages to compare")
+
+    # Search command
+    search_parser = subparsers.add_parser("search", help="Search for configurations or settings")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("-r", "--repository", help="Limit search to specific repository")
+    search_parser.add_argument("--content", action="store_true", help="Search in file contents")
+
     # Profile commands
     profile_parser = subparsers.add_parser("profile", help="Profile management commands")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
@@ -111,6 +129,174 @@ Examples:
         elif args.command in ["apply", "manage"]:
             is_manage = args.command == "manage"
             _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, is_manage)
+
+        elif args.command == "preview":
+            logger.info(f"Previewing changes for repository: {args.repository_name}")
+            
+            # Get target packages
+            target_packages = args.target_packages.split(',') if args.target_packages else None
+            
+            # Get profile configuration
+            profile = args.profile or 'default'
+            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+            if not config:
+                logger.error(f"No configuration found for repository: {args.repository_name}")
+                sys.exit(1)
+                
+            profile_config = config.get('profiles', {}).get(profile, {})
+            
+            # Preview packages
+            if 'packages' in profile_config:
+                packages = profile_config['packages']
+                installed = [pkg for pkg in packages if dotfile_manager._check_installed_packages([pkg])]
+                to_install = [pkg for pkg in packages if pkg not in installed]
+                
+                print(f"\n{Fore.CYAN}Package Changes:{Style.RESET_ALL}")
+                if to_install:
+                    print(f"{Fore.GREEN}Packages to be installed:{Style.RESET_ALL}")
+                    for pkg in to_install:
+                        print(f"  + {pkg}")
+                if installed:
+                    print(f"{Fore.BLUE}Already installed packages:{Style.RESET_ALL}")
+                    for pkg in installed:
+                        print(f"  = {pkg}")
+            
+            # Preview dotfile changes
+            print(f"\n{Fore.CYAN}Dotfile Changes:{Style.RESET_ALL}")
+            dotfile_dirs = dotfile_manager._discover_dotfile_directories(
+                config.get('local_directory', ''),
+                target_packages=target_packages
+            )
+            
+            for directory in dotfile_dirs:
+                print(f"\n{Fore.YELLOW}Directory: {directory}{Style.RESET_ALL}")
+                target_dir = os.path.expanduser('~')
+                for root, _, files in os.walk(directory):
+                    for file in files:
+                        src_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(src_path, directory)
+                        dst_path = os.path.join(target_dir, rel_path)
+                        
+                        if os.path.exists(dst_path):
+                            if os.path.islink(dst_path):
+                                print(f"  ~ {rel_path} (will update symlink)")
+                            else:
+                                print(f"  ! {rel_path} (will backup and replace)")
+                        else:
+                            print(f"  + {rel_path} (will create)")
+
+        elif args.command == "diff":
+            from difflib import unified_diff
+            import tempfile
+            
+            logger.info(f"Showing differences for repository: {args.repository_name}")
+            
+            # Get target packages
+            target_packages = args.target_packages.split(',') if args.target_packages else None
+            
+            # Get profile configuration
+            profile = args.profile or 'default'
+            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+            if not config:
+                logger.error(f"No configuration found for repository: {args.repository_name}")
+                sys.exit(1)
+            
+            dotfile_dirs = dotfile_manager._discover_dotfile_directories(
+                config.get('local_directory', ''),
+                target_packages=target_packages
+            )
+            
+            print(f"\n{Fore.CYAN}Configuration Differences:{Style.RESET_ALL}")
+            
+            for directory in dotfile_dirs:
+                for root, _, files in os.walk(directory):
+                    for file in files:
+                        src_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(src_path, directory)
+                        dst_path = os.path.join(os.path.expanduser('~'), rel_path)
+                        
+                        if os.path.exists(dst_path) and os.path.isfile(dst_path):
+                            try:
+                                with open(src_path, 'r') as f1, open(dst_path, 'r') as f2:
+                                    src_lines = f1.readlines()
+                                    dst_lines = f2.readlines()
+                                    
+                                    diff = list(unified_diff(
+                                        dst_lines, src_lines,
+                                        fromfile=f"current/{rel_path}",
+                                        tofile=f"new/{rel_path}"
+                                    ))
+                                    
+                                    if diff:
+                                        print(f"\n{Fore.YELLOW}File: {rel_path}{Style.RESET_ALL}")
+                                        for line in diff:
+                                            if line.startswith('+'):
+                                                print(f"{Fore.GREEN}{line.rstrip()}{Style.RESET_ALL}")
+                                            elif line.startswith('-'):
+                                                print(f"{Fore.RED}{line.rstrip()}{Style.RESET_ALL}")
+                                            else:
+                                                print(line.rstrip())
+                            except UnicodeDecodeError:
+                                print(f"\n{Fore.YELLOW}File: {rel_path} (binary file){Style.RESET_ALL}")
+                        elif not os.path.exists(dst_path):
+                            print(f"\n{Fore.GREEN}New file: {rel_path}{Style.RESET_ALL}")
+
+        elif args.command == "search":
+            import fnmatch
+            
+            def search_content(file_path, query):
+                try:
+                    with open(file_path, 'r') as f:
+                        for i, line in enumerate(f, 1):
+                            if query.lower() in line.lower():
+                                return i, line.strip()
+                    return None
+                except UnicodeDecodeError:
+                    return None
+            
+            logger.info(f"Searching for: {args.query}")
+            
+            # Get repositories to search
+            if args.repository:
+                repositories = [args.repository]
+            else:
+                repositories = dotfile_manager.config_manager.list_rices()
+            
+            found_something = False
+            for repo in repositories:
+                config = dotfile_manager.config_manager.get_rice_config(repo)
+                if not config:
+                    continue
+                
+                local_dir = config.get('local_directory', '')
+                if not local_dir or not os.path.exists(local_dir):
+                    continue
+                
+                print(f"\n{Fore.CYAN}Searching in repository: {repo}{Style.RESET_ALL}")
+                
+                # Search in dotfile directories
+                dotfile_dirs = dotfile_manager._discover_dotfile_directories(local_dir)
+                
+                for directory in dotfile_dirs:
+                    for root, _, files in os.walk(directory):
+                        for file in files:
+                            if fnmatch.fnmatch(file.lower(), f"*{args.query.lower()}*"):
+                                rel_path = os.path.relpath(os.path.join(root, file), local_dir)
+                                print(f"{Fore.GREEN}Found in filename:{Style.RESET_ALL} {rel_path}")
+                                found_something = True
+                            
+                            if args.content:
+                                file_path = os.path.join(root, file)
+                                result = search_content(file_path, args.query)
+                                if result:
+                                    line_num, line = result
+                                    rel_path = os.path.relpath(file_path, local_dir)
+                                    print(f"{Fore.YELLOW}Found in content:{Style.RESET_ALL} {rel_path}:{line_num}")
+                                    print(f"  {line}")
+                                    found_something = True
+            
+            if not found_something:
+                print(f"\n{Fore.YELLOW}No matches found for: {args.query}{Style.RESET_ALL}")
 
         elif args.command == "profile":
             if args.profile_command == "list":
