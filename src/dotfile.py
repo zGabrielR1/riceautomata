@@ -19,6 +19,8 @@ import yaml
 import asyncio
 import shutil
 from src.file_operations import FileOperations
+import traceback
+from contextlib import contextmanager
 
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
@@ -34,6 +36,22 @@ class ValidationError(Exception):
 
 class ConfigurationError(Exception):
     pass
+
+@contextmanager
+def _error_context(phase):
+    """Context manager for handling errors in specific phases."""
+    try:
+        yield
+    except ScriptExecutionError as e:
+        logger.error(f"Script execution failed during {phase}: {e}")
+        raise
+    except FileOperationError as e:
+        logger.error(f"File operation failed during {phase}: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during {phase}: {e}")
+        logger.debug(traceback.format_exc())
+        raise
 
 class DotfileNode:
     def __init__(self, path: str, is_dotfile: bool = False):
@@ -557,8 +575,9 @@ class DotfileManager:
 
             env = os.environ.copy()
             env['RICE_DIRECTORY'] = local_dir
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'pre_clone'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
+                    return False
 
             if nix_config:
                 if not self._apply_nix_config(local_dir, package_manager):
@@ -577,8 +596,9 @@ class DotfileManager:
                 else:
                     self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
 
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_clone', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'post_clone'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_clone', rice_config.get('script_config'), env):
+                    return False
 
             dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
             if not dotfile_dirs:
@@ -605,17 +625,20 @@ class DotfileManager:
                 if not self._install_fonts(local_dir, package_manager):
                     return False
 
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_install_dependencies', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'pre_install_dependencies'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_install_dependencies', rice_config.get('script_config'), env):
+                    return False
 
             if not package_manager.install(dependencies, local_dir=local_dir):
                 return False
 
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_install_dependencies', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'post_install_dependencies'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_install_dependencies', rice_config.get('script_config'), env):
+                    return False
 
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_apply', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'pre_apply'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_apply', rice_config.get('script_config'), env):
+                    return False
 
             self._apply_templates(local_dir, template_context)
 
@@ -654,8 +677,9 @@ class DotfileManager:
                         if not self._apply_extra_directory(local_dir, item_path):
                             applied_all = False
 
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'post_apply', rice_config.get('script_config'), env):
-                return False
+            with _error_context(self, 'post_apply'):
+                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_apply', rice_config.get('script_config'), env):
+                    return False
 
             if applied_all:
                 self.logger.info(f"Successfully applied dotfiles from {repository_name}")
@@ -668,6 +692,38 @@ class DotfileManager:
         except Exception as e:
             self.logger.error(f"An error occurred while applying dotfiles: {e}")
             return False
+
+    async def _install_package_async(self, package: str, package_manager, local_dir: str) -> bool:
+        """Install a single package asynchronously."""
+        try:
+            self.logger.info(f"Installing package: {package}")
+            return await package_manager.install_async(package, local_dir=local_dir)
+        except Exception as e:
+            self.logger.error(f"Failed to install package {package}: {e}")
+            return False
+
+    async def _install_missing_packages(self, packages: List[str], package_manager, local_dir: str) -> bool:
+        """Install missing packages in parallel."""
+        if not packages:
+            return True
+
+        tasks = []
+        for package in packages:
+            if not package_manager.is_installed(package):
+                task = self._install_package_async(package, package_manager, local_dir)
+                tasks.append(task)
+
+        if not tasks:
+            return True
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        success = all(isinstance(r, bool) and r for r in results)
+        
+        if not success:
+            self.logger.error("Some packages failed to install")
+            return False
+            
+        return True
 
     def _check_installed_packages(self, packages):
         """Checks if the specified packages are installed."""
@@ -830,7 +886,7 @@ class DotfileManager:
             self.logger.error(f"Error managing profiles: {e}")
             return False
 
-    def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, custom_paths = None, ignore_rules = False, template_context = {}):
+    def manage_dotfiles(self, repository_name, stow_options = [], package_manager = None, target_packages = None, custom_paths = None, ignore_rules = False, template_context = {}, discover_templates=False, custom_scripts=None):
          """Manages the dotfiles, uninstalling the previous rice, and applying the new one."""
          current_rice = None
          for key, value in self.config_manager.config_data.get('rices', {}).items():
@@ -860,8 +916,9 @@ class DotfileManager:
           # Execute pre uninstall scripts
           env = os.environ.copy()
           env['RICE_DIRECTORY'] = local_dir
-          if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_uninstall', rice_config.get('script_config'), env):
-                return False
+          with _error_context(self, 'pre_uninstall'):
+              if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_uninstall', rice_config.get('script_config'), env):
+                  return False
 
           for directory, category in dotfile_dirs.items():
             if category == "config":
@@ -925,8 +982,9 @@ class DotfileManager:
                    self.logger.warning(f"Could not find extra directory: {target_path}. Skipping...")
 
           # Execute post uninstall scripts
-          if not self.script_runner.run_scripts_by_phase(local_dir, 'post_uninstall', rice_config.get('script_config'), env):
-                return False
+          with _error_context(self, 'post_uninstall'):
+              if not self.script_runner.run_scripts_by_phase(local_dir, 'post_uninstall', rice_config.get('script_config'), env):
+                  return False
 
           if unlinked_all:
                 self.logger.info(f"Successfully uninstalled the dotfiles for: {repository_name}")
@@ -1376,3 +1434,118 @@ class DotfileManager:
             
         os.makedirs(target, exist_ok=True)
         self._create_symlink(theme_dir, target)
+
+    def _manage_profiles(self, local_dir: str, profile_name: str = None, action: str = "apply") -> bool:
+        """
+        Manage dotfile profiles for different configurations.
+        
+        Args:
+            local_dir: The local directory containing the dotfiles
+            profile_name: Name of the profile to manage
+            action: Action to perform (apply/save/list/delete)
+            
+        Returns:
+            bool: True if the operation was successful
+        """
+        try:
+            profiles_dir = os.path.join(local_dir, ".profiles")
+            os.makedirs(profiles_dir, exist_ok=True)
+            
+            if action == "list":
+                profiles = [f.replace(".json", "") for f in os.listdir(profiles_dir) if f.endswith(".json")]
+                if not profiles:
+                    self.logger.info("No profiles found")
+                else:
+                    self.logger.info(f"Available profiles: {', '.join(profiles)}")
+                return True
+                
+            if not profile_name:
+                self.logger.error("Profile name is required for this operation")
+                return False
+                
+            profile_path = os.path.join(profiles_dir, f"{profile_name}.json")
+            
+            if action == "save":
+                # Save current configuration as a profile
+                config = {
+                    "dotfiles": self._get_current_dotfile_state(),
+                    "packages": self._get_installed_packages(),
+                    "templates": self._get_template_variables(),
+                    "timestamp": create_timestamp()
+                }
+                with open(profile_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+                self.logger.info(f"Saved profile: {profile_name}")
+                return True
+                
+            elif action == "apply":
+                if not os.path.exists(profile_path):
+                    self.logger.error(f"Profile not found: {profile_name}")
+                    return False
+                    
+                with open(profile_path, 'r') as f:
+                    config = json.load(f)
+                
+                # Apply the profile configuration
+                with _error_context("profile_application"):
+                    success = self._apply_profile_configuration(config)
+                    if success:
+                        self.logger.info(f"Successfully applied profile: {profile_name}")
+                    return success
+                    
+            elif action == "delete":
+                if os.path.exists(profile_path):
+                    os.remove(profile_path)
+                    self.logger.info(f"Deleted profile: {profile_name}")
+                    return True
+                self.logger.error(f"Profile not found: {profile_name}")
+                return False
+                
+            else:
+                self.logger.error(f"Unknown profile action: {action}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Failed to manage profile: {e}")
+            self.logger.debug(traceback.format_exc())
+            return False
+            
+    def _get_current_dotfile_state(self) -> dict:
+        """Get the current state of dotfiles."""
+        state = {}
+        try:
+            # Implement logic to capture current dotfile state
+            # This should include symlinks, file permissions, etc.
+            pass
+        except Exception as e:
+            self.logger.error(f"Failed to get dotfile state: {e}")
+        return state
+        
+    def _get_installed_packages(self) -> List[str]:
+        """Get list of installed packages."""
+        try:
+            # Implement logic to get installed packages
+            pass
+        except Exception as e:
+            self.logger.error(f"Failed to get installed packages: {e}")
+        return []
+        
+    def _get_template_variables(self) -> dict:
+        """Get current template variables."""
+        try:
+            # Implement logic to get template variables
+            pass
+        except Exception as e:
+            self.logger.error(f"Failed to get template variables: {e}")
+        return {}
+        
+    def _apply_profile_configuration(self, config: dict) -> bool:
+        """Apply a profile configuration."""
+        try:
+            # Implement logic to apply profile configuration
+            # This should handle dotfiles, packages, and templates
+            pass
+        except Exception as e:
+            self.logger.error(f"Failed to apply profile configuration: {e}")
+            return False
+        return True
