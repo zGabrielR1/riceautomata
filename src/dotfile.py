@@ -11,16 +11,29 @@ import sys
 import os
 import re
 import json
+import shutil
+from typing import Dict, List, Any, Optional, Tuple
 from jinja2 import Environment, FileSystemLoader
-from typing import Dict, List, Optional, Any
-import time
 import toml
 import yaml
 import asyncio
 import shutil
-import math
+from src.file_operations import FileOperations
+
+from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
+from src.config import ConfigManager
+from src.script import ScriptRunner
+from src.backup import BackupManager
+from src.dotfile_analyzer import DotfileAnalyzer
+from src.template_handler import TemplateHandler
 
 logger = setup_logger()
+
+class ValidationError(Exception):
+    pass
+
+class ConfigurationError(Exception):
+    pass
 
 class DotfileNode:
     def __init__(self, path: str, is_dotfile: bool = False):
@@ -193,7 +206,9 @@ class DotfileManager:
         self.dependency_map = self._load_dependency_map()
         self.nix_installed = False
         self.script_runner = ScriptRunner(verbose)
-        self.template_env = Environment(loader=FileSystemLoader('/'))
+        self.analyzer = DotfileAnalyzer(self.rules_config, verbose)
+        self.template_handler = TemplateHandler(verbose)
+        self.file_ops = FileOperations(self.backup_manager, verbose)
         self.max_retries = 3
         self.retry_delay = 2  # seconds
         self.dotfile_tree = DotfileTree()
@@ -338,373 +353,24 @@ class DotfileManager:
             raise ConfigurationError(f"Failed to load dependency map: {e}")
 
     def _validate_dotfile_directory(self, dir_path: str) -> None:
-        """Validates a dotfile directory."""
-        if not os.path.exists(dir_path):
-            raise ValidationError(f"Directory does not exist: {dir_path}")
-        if not os.path.isdir(dir_path):
-            raise ValidationError(f"Path is not a directory: {dir_path}")
-        if not os.access(dir_path, os.R_OK):
-            raise ValidationError(f"Directory is not readable: {dir_path}")
+        """Delegate to FileOperations."""
+        return self.file_ops.validate_directory(dir_path)
 
     def _safe_file_operation(self, operation_name: str, operation, *args, **kwargs):
-        """Executes a file operation with backup and rollback support."""
-        backup_id = self.backup_manager.start_operation_backup(operation_name)
-        try:
-            result = operation(*args, **kwargs)
-            return result
-        except Exception as e:
-            if backup_id:
-                try:
-                    self.backup_manager.rollback_operation(backup_id)
-                except Exception as rollback_error:
-                    self.logger.error(f"Failed to rollback operation: {rollback_error}")
-            raise
+        """Delegate to FileOperations."""
+        return self.file_ops.safe_file_operation(operation_name, operation, *args, **kwargs)
 
-    def _score_dir_name(self, dir_name):
-        """
-        Score a directory name based on how likely it is to contain dotfiles.
-        Returns a tuple of (score, metadata) where metadata contains additional context.
-        """
-        score = 0
-        metadata = {
-            "category": None,
-            "confidence": "low",
-            "matched_rules": []
-        }
+    def _copy_dotfiles(self, source_dir: str, target_dir: str, backup_id: Optional[str] = None) -> None:
+        """Delegate to FileOperations."""
+        return self.file_ops.copy_files(source_dir, target_dir, backup_id)
 
-        # Common dotfile directory patterns
-        known_config_dirs = {
-            # Desktop Environment / Window Manager configs
-            "hypr": ("de/wm", 4), "sway": ("de/wm", 4), "i3": ("de/wm", 4),
-            "awesome": ("de/wm", 4), "bspwm": ("de/wm", 4), "dwm": ("de/wm", 4),
-            "xmonad": ("de/wm", 4), "qtile": ("de/wm", 4), "openbox": ("de/wm", 4),
-            
-            # Status bars and widgets
-            "waybar": ("statusbar", 4), "polybar": ("statusbar", 4), 
-            "eww": ("widgets", 4), "ags": ("widgets", 4),
-            
-            # Terminal emulators
-            "alacritty": ("terminal", 4), "kitty": ("terminal", 4), 
-            "wezterm": ("terminal", 4), "foot": ("terminal", 4),
-            
-            # Shell configurations
-            "zsh": ("shell", 4), "bash": ("shell", 4), "fish": ("shell", 4),
-            
-            # Text editors and IDEs
-            "nvim": ("editor", 4), "vim": ("editor", 4), "emacs": ("editor", 4),
-            "vscode": ("editor", 4), "code": ("editor", 4),
-            
-            # System utilities
-            "dunst": ("notification", 3), "rofi": ("launcher", 3),
-            "picom": ("compositor", 3), "sxhkd": ("hotkeys", 3),
-            
-            # Theming and appearance
-            "gtk-2.0": ("theme", 3), "gtk-3.0": ("theme", 3), "gtk-4.0": ("theme", 3),
-            "themes": ("theme", 3), "icons": ("theme", 3), "fonts": ("theme", 3),
-            
-            # Common config directories
-            "config": ("general", 2), ".config": ("general", 3),
-            
-            # Development tools
-            "git": ("dev", 2), "npm": ("dev", 2), "yarn": ("dev", 2),
-            "cargo": ("dev", 2), "pip": ("dev", 2)
-        }
+    def _remove_dotfiles(self, target_dir: str) -> None:
+        """Delegate to FileOperations."""
+        return self.file_ops.remove_files(target_dir)
 
-        # Check against known config directories
-        if dir_name in known_config_dirs:
-            category, points = known_config_dirs[dir_name]
-            score += points
-            metadata["category"] = category
-            metadata["matched_rules"].append(f"known_config_dir:{dir_name}")
-            metadata["confidence"] = "high" if points >= 4 else "medium"
-
-        # Check custom rules from config
-        for rule in self.rules_config.get('rules', []):
-            if rule.get('regex'):
-                try:
-                    if re.search(rule['regex'], dir_name):
-                        score += 3
-                        metadata["matched_rules"].append(f"custom_rule:{rule['regex']}")
-                except Exception as e:
-                    self.logger.error(f"Error with rule regex: {rule['regex']}. Error: {e}")
-            elif dir_name == rule.get('name'):
-                score += 3
-                metadata["matched_rules"].append(f"custom_rule_name:{rule['name']}")
-
-        # Common naming patterns
-        if dir_name.startswith('.'):
-            score += 2
-            metadata["matched_rules"].append("dotfile_prefix")
-        elif dir_name.startswith('dot-'):
-            score += 2
-            metadata["matched_rules"].append("dot_prefix")
-        elif dir_name.endswith('rc'):
-            score += 2
-            metadata["matched_rules"].append("rc_suffix")
-        elif dir_name.endswith('config'):
-            score += 2
-            metadata["matched_rules"].append("config_suffix")
-
-        # Update confidence based on final score
-        if score >= 4:
-            metadata["confidence"] = "high"
-        elif score >= 2:
-            metadata["confidence"] = "medium"
-
-        return score, metadata
-
-    def _score_dotfile_content(self, dir_path):
-        """
-        Score directory contents based on how likely they are to be dotfiles.
-        Returns a tuple of (score, metadata) where metadata contains detailed analysis.
-        """
-        score = 0
-        metadata = {
-            "file_types": {},
-            "config_matches": [],
-            "potential_dependencies": set(),
-            "matched_patterns": set()
-        }
-
-        # Common configuration file extensions
-        config_extensions = {
-            '.conf': 2, '.config': 2, '.cfg': 2, '.ini': 2,
-            '.json': 1.5, '.yaml': 1.5, '.yml': 1.5, '.toml': 1.5,
-            '.rc': 1.5, '.profile': 1.5
-        }
-
-        # Configuration keywords to look for
-        config_keywords = {
-            "config": 0.5, "settings": 0.5, "preferences": 0.5,
-            "window": 0.3, "workspace": 0.3, "keybind": 0.3,
-            "theme": 0.3, "color": 0.3, "font": 0.3,
-            "alias": 0.3, "export": 0.3, "PATH": 0.3
-        }
-
-        try:
-            for root, dirs, files in os.walk(dir_path):
-                # Skip hidden directories except .config
-                dirs[:] = [d for d in dirs if not d.startswith('.') or d == '.config']
-                
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(file_path, dir_path)
-                    
-                    # Track file extension
-                    ext = os.path.splitext(file)[1].lower()
-                    metadata["file_types"][ext] = metadata["file_types"].get(ext, 0) + 1
-
-                    # Score based on extension
-                    if ext in config_extensions:
-                        score += config_extensions[ext]
-                        metadata["matched_patterns"].add(f"extension:{ext}")
-
-                    # Analyze file content if it's a text file and not too large
-                    if ext in config_extensions and os.path.getsize(file_path) < 500000:
-                        try:
-                            with open(file_path, 'r', errors='ignore') as f:
-                                content = f.read(4096).lower()  # Read first 4KB
-                                
-                                # Look for config keywords
-                                for keyword, points in config_keywords.items():
-                                    if keyword in content:
-                                        score += points
-                                        metadata["config_matches"].append(f"{rel_path}:{keyword}")
-
-                                # Look for potential dependencies
-                                if re.search(r'(require|import|use|include)\s+[\'"]([^\'"])+[\'"]', content):
-                                    metadata["potential_dependencies"].add(rel_path)
-                                    score += 0.5
-
-                        except (IOError, UnicodeDecodeError):
-                            continue
-
-        except Exception as e:
-            self.logger.error(f"Error analyzing directory {dir_path}: {e}")
-            return 0, metadata
-
-        # Normalize score based on file count
-        file_count = sum(metadata["file_types"].values())
-        if file_count > 10:
-            score = score / (math.log2(file_count) + 1)
-
-        return score, metadata
-
-    def _is_likely_dotfile_dir(self, dir_path):
-        """
-        Determine if a directory is likely to contain dotfiles using enhanced scoring.
-        Returns a tuple of (is_likely, confidence, metadata)
-        """
-        dir_name = os.path.basename(dir_path)
-        name_score, name_metadata = self._score_dir_name(dir_name)
-        content_score, content_metadata = self._score_dotfile_content(dir_path)
-        
-        total_score = name_score + content_score
-        
-        # Combine metadata
-        metadata = {
-            "name_analysis": name_metadata,
-            "content_analysis": content_metadata,
-            "total_score": total_score,
-            "name_score": name_score,
-            "content_score": content_score
-        }
-        
-        # Determine confidence level
-        if total_score >= 6:
-            confidence = "high"
-        elif total_score >= 3:
-            confidence = "medium"
-        else:
-            confidence = "low"
-            
-        metadata["confidence"] = confidence
-        
-        # Log detailed analysis if verbose
-        if self.verbose:
-            self.logger.debug(f"Dotfile directory analysis for {dir_path}:")
-            self.logger.debug(f"Name score: {name_score} ({name_metadata['confidence']})")
-            self.logger.debug(f"Content score: {content_score}")
-            self.logger.debug(f"Total score: {total_score} ({confidence})")
-            if name_metadata["matched_rules"]:
-                self.logger.debug(f"Matched rules: {', '.join(name_metadata['matched_rules'])}")
-            if content_metadata["matched_patterns"]:
-                self.logger.debug(f"Matched patterns: {len(content_metadata['matched_patterns'])}")
-            if content_metadata["config_matches"]:
-                self.logger.debug(f"Config matches: {len(content_metadata['config_matches'])}")
-            if content_metadata["potential_dependencies"]:
-                self.logger.debug(f"Potential dependencies found in: {len(content_metadata['potential_dependencies'])} files")
-        
-        return total_score >= 2, confidence, metadata
-
-    def _discover_dotfile_directories(self, local_dir, target_packages = None, custom_paths = None, ignore_rules = False):
-        dotfile_dirs = {}
-        paths_to_check = []
-
-        if custom_paths:
-            for path in custom_paths:
-                full_path = os.path.join(local_dir, path)
-                if os.path.exists(full_path):
-                    paths_to_check.append(full_path)
-                else:
-                    self.logger.warning(f"Could not find custom path: {path}")
-        else:
-            paths_to_check.append(local_dir)
-
-        for base_path in paths_to_check:
-            for item in os.listdir(base_path):
-                item_path = os.path.join(base_path, item)
-                rel_path = os.path.relpath(item_path, local_dir)
-                if os.path.isdir(item_path):
-                    if target_packages:
-                        if item in target_packages:
-                            category = self._categorize_dotfile_directory(item_path)
-                            dotfile_dirs[rel_path] = category
-                        elif item == ".config":
-                            for sub_item in os.listdir(item_path):
-                                sub_item_path = os.path.join(item_path, sub_item)
-                                if os.path.isdir(sub_item_path) and sub_item in target_packages:
-                                    category = self._categorize_dotfile_directory(sub_item_path)
-                                    dotfile_dirs[os.path.join(rel_path, sub_item)] = category
-                    else:
-                        if ignore_rules or self._is_likely_dotfile_dir(item_path)[0]:
-                            category = self._categorize_dotfile_directory(item_path)
-                            dotfile_dirs[rel_path] = category
-        return dotfile_dirs
-
-    def _discover_dependencies(self, local_dir, dotfile_dirs):
-        dependencies = []
-        package_managers = {
-            'pacman': ['pkglist.txt', 'packages.txt', 'arch-packages.txt'],
-            'apt': ['apt-packages.txt', 'debian-packages.txt'],
-            'dnf': ['fedora-packages.txt', 'rpm-packages.txt'],
-            'brew': ['brewfile', 'Brewfile'],
-            'pip': ['requirements.txt', 'python-packages.txt'],
-            'cargo': ['Cargo.toml'],
-            'npm': ['package.json']
-        }
-
-        for pm, files in package_managers.items():
-            for file in files:
-                dep_file_path = os.path.join(local_dir, file)
-                if os.path.exists(dep_file_path) and os.path.isfile(dep_file_path):
-                    try:
-                        with open(dep_file_path, 'r') as f:
-                            if file == 'package.json':
-                                data = json.load(f)
-                                deps = data.get('dependencies', {})
-                                deps.update(data.get('devDependencies', {}))
-                                for pkg in deps.keys():
-                                    dependencies.append(f"npm:{pkg}")
-                            elif file == 'Cargo.toml':
-                                with open(dep_file_path, 'r') as f:
-                                    content = f.read()
-                                    data = toml.loads(content)
-                                    if 'dependencies' in data:
-                                        for pkg in data['dependencies'].keys():
-                                            dependencies.append(f"cargo:{pkg}")
-                            else:
-                                for line in f:
-                                    line = line.strip()
-                                    if line and not line.startswith('#'):
-                                        dependencies.append(f"{pm}:{line}")
-                    except Exception as e:
-                        self.logger.warning(f"Error parsing dependency file {file}: {e}")
-
-        common_deps = {
-            'nvim': ['neovim'],
-            'zsh': ['zsh'],
-            'hypr': ['hyprland'],
-            'waybar': ['waybar'],
-            'alacritty': ['alacritty'],
-            'dunst': ['dunst'],
-            'rofi': ['rofi'],
-            'sway': ['sway'],
-            'fish': ['fish'],
-            'kitty': ['kitty'],
-            'i3': ['i3-wm'],
-            'bspwm': ['bspwm'],
-            'polybar': ['polybar'],
-            'picom': ['picom'],
-            'qtile': ['qtile'],
-            'xmonad': ['xmonad'],
-            'eww': ['eww-wayland'],
-            'ags': ['yarn', 'esbuild', 'sass', 'gtk4'],
-            'foot': ['foot'],
-            'fuzzel': ['fuzzel']
-        }
-
-        for dir_name in dotfile_dirs:
-            base_name = os.path.basename(dir_name)
-            if base_name in common_deps:
-                dependencies.extend(f"auto:{dep}" for dep in common_deps[base_name])
-
-        arch_packages_dir = os.path.join(local_dir, "arch-packages")
-        if os.path.exists(arch_packages_dir) and os.path.isdir(arch_packages_dir):
-            for item in os.listdir(arch_packages_dir):
-                item_path = os.path.join(arch_packages_dir, item)
-                if os.path.isdir(item_path):
-                    dependencies.append(f"aur:{item}")
-
-        custom_deps_file = os.path.join(local_dir, "scriptdata", "dependencies.conf")
-        if os.path.exists(custom_deps_file) and os.path.isfile(custom_deps_file):
-           try:
-              with open(custom_deps_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                       dependencies.append(line)
-           except Exception as e:
-               self.logger.error(f"Error reading custom dependency file {custom_deps_file}: {e}")
-
-        return list(set(dependencies))
-
-    def _check_nix_config(self, local_dir):
-      nix_files = ["flake.nix", "configuration.nix"]
-      for file in nix_files:
-        if os.path.exists(os.path.join(local_dir, file)):
-          return True
-      return False
+    def _discover_scripts(self, local_dir: str, custom_scripts = None) -> Dict[str, List[str]]:
+        """Delegate to FileOperations."""
+        return self.file_ops.discover_scripts(local_dir, custom_scripts)
 
     def _install_fonts(self, local_dir, package_manager):
       def _is_font_file(filename):
@@ -867,111 +533,6 @@ class DotfileManager:
                          except Exception as e:
                            self.logger.error(f"Error saving the processed template: {output_path}. Error: {e}")
         return True
-
-    def _apply_templates(self, source_dir: str, template_context: Optional[Dict[str, Any]] = None) -> None:
-        if not template_context:
-            return
-
-        for root, _, files in os.walk(source_dir):
-            for file in files:
-                if file.endswith(".tpl"):
-                    template_path = os.path.join(root, file)
-                    try:
-                        self.logger.debug(f"Processing template: {template_path}")
-                        template = self.template_env.get_template(os.path.relpath(template_path, source_dir))
-                        rendered_content = template.render(**template_context)
-                        output_path = template_path.replace(".tpl", "")
-                        with open(output_path, 'w', encoding='utf-8'):
-                            f.write(rendered_content)
-                        self.logger.info(f"Rendered template: {output_path}")
-                    except Exception as e:
-                        self.logger.error(f"Failed to render template {template_path}: {e}")
-                        raise TemplateRenderingError(f"Error rendering template {template_path}")
-
-    def _copy_dotfiles(self, source_dir: str, target_dir: str, backup_id: Optional[str] = None) -> None:
-        try:
-            self._validate_dotfile_directory(source_dir)
-
-            def copy_operation():
-                if not os.path.exists(target_dir):
-                    os.makedirs(target_dir, exist_ok=True)
-
-                for item in os.listdir(source_dir):
-                    src = os.path.join(source_dir, item)
-                    dst = os.path.join(target_dir, item)
-
-                    if os.path.exists(dst):
-                        self.backup_manager.backup_file(dst)
-
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(src, dst)
-
-            self._safe_file_operation(
-                "copy_dotfiles",
-                copy_operation
-            )
-        except Exception as e:
-            raise FileOperationError(f"Failed to copy dotfiles from {source_dir} to {target_dir}: {e}")
-
-    def _remove_dotfiles(self, target_dir: str) -> None:
-        try:
-            self._validate_dotfile_directory(target_dir)
-
-            def remove_operation():
-                backup_id = self.backup_manager.start_operation_backup("remove_dotfiles")
-
-                for item in os.listdir(target_dir):
-                    path = os.path.join(target_dir, item)
-                    if os.path.exists(path):
-                        if os.path.isdir(path):
-                            self.backup_manager.backup_file(path)
-                            shutil.rmtree(path)
-                        else:
-                            self.backup_manager.backup_file(path)
-                            os.remove(path)
-
-                return backup_id
-
-            self._safe_file_operation(
-                "remove_dotfiles",
-                remove_operation
-            )
-        except Exception as e:
-            raise FileOperationError(f"Failed to remove dotfiles from {target_dir}: {e}")
-
-    def _discover_scripts(self, local_dir: str, custom_scripts = None) -> Dict[str, List[str]]:
-        try:
-            script_phases = {
-                "pre_clone": [], "post_clone": [],
-                "pre_install_dependencies": [], "post_install_dependencies": [],
-                "pre_apply": [], "post_apply": [],
-                "pre_uninstall": [], "post_uninstall": []
-            }
-            if custom_scripts:
-                for script in custom_scripts:
-                   script_path = os.path.join(local_dir, script)
-                   if os.path.exists(script_path) and os.path.isfile(script_path) and os.access(script_path, os.X_OK):
-                       for phase in script_phases:
-                        if script.startswith(phase):
-                            script_phases[phase].append(script)
-                            break
-            script_dir = os.path.join(local_dir, "scriptdata")
-            if not os.path.exists(script_dir) or not os.path.isdir(script_dir):
-                return script_phases
-
-            for item in os.listdir(script_dir):
-                item_path = os.path.join(script_dir, item)
-                if os.path.isfile(item_path) and os.access(item_path, os.X_OK):
-                    script_path = os.path.join("scriptdata", item)
-                    for phase in script_phases:
-                        if item.startswith(phase):
-                            script_phases[phase].append(script_path)
-                            break
-            return script_phases
-        except Exception as e:
-            raise FileOperationError(f"Failed to discover scripts in {local_dir}: {e}")
 
     def apply_dotfiles(self, repository_name, stow_options=[], package_manager=None, target_packages=None, overwrite_symlink=None, custom_paths=None, ignore_rules=False, template_context={}, discover_templates=False, custom_scripts=None):
         """Applies dotfiles from a repository using GNU Stow."""
