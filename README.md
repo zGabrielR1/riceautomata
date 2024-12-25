@@ -90,20 +90,36 @@ riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 - **Command-Line Interface**: Simple and intuitive CLI for all operations
 - **Profile Management**: Create and switch between different configuration profiles
 - **Package Management**: 
-  - Automatic package installation
+  - Automatic package installation with parallel processing
   - Support for multiple package managers
   - Nix integration
 - **Backup System**: Create and restore configuration backups
+- **Enhanced Error Handling**: Robust error handling with detailed logging
+- **Progress Tracking**: Visual progress indicators for long-running operations
+- **Template System**: Advanced template processing with Jinja2
+- **Smart Directory Analysis**: Intelligent detection of dotfile directories
 
-### Asset Management
-- Automated handling of fonts and icons
-- Proper permission management
-- Directory structure preservation
+### Advanced Features
+- **Parallel Processing**: Concurrent package installation and script execution
+- **Profile Management**: Comprehensive profile system with save/load/switch capabilities
+- **Directory Analysis**: Smart scoring and categorization of dotfile directories
+- **Template Processing**: Support for multiple template formats with variable extraction
+- **Error Recovery**: Graceful handling of errors with detailed logging
+- **Progress Tracking**: Real-time progress indicators for all operations
 
-### Configuration
-- Support for multiple formats (JSON, YAML, TOML)
-- Template system using Jinja2
-- Flexible profile configurations
+### Development Features
+- **Modular Architecture**: Well-organized codebase with clear separation of concerns
+- **Type Hints**: Comprehensive type annotations for better code quality
+- **Documentation**: Detailed docstrings and comments
+- **Error Handling**: Robust error handling with context managers
+- **Logging**: Detailed logging system for debugging
+
+### Upcoming Features
+- **Interactive Setup Wizards**: User-friendly initial setup process
+- **State Management**: Consistent application state tracking
+- **Automated Testing**: Comprehensive test suite with CI integration
+- **Configuration Validation**: Advanced validation of user configurations
+- **User-Friendly CLI**: Enhanced command-line interface with better feedback
 
 ## Directory Structure
 ```
