@@ -12,6 +12,7 @@ class DotfileAnalyzer:
         self.rules_config = rules_config or {}
         self.verbose = verbose
         self.logger = logger
+        self.dependency_db = {}  # Initialize dependency database
         self._init_scoring_rules()
         
     def _init_scoring_rules(self):
@@ -57,7 +58,9 @@ class DotfileAnalyzer:
                         results[dir_path] = {
                             'score': score,
                             'metadata': metadata,
-                            'confidence': self._calculate_confidence(score, metadata)
+                            'confidence': self._calculate_confidence(score, metadata),
+                            'dependencies': self._extract_dependencies(dir_path),
+                            'themes': self._detect_themes(dir_path)
                         }
                         
                         if self.verbose:
@@ -175,3 +178,47 @@ class DotfileAnalyzer:
             confidence *= 0.8
             
         return min(confidence, 1.0)  # Ensure confidence is between 0 and 1
+
+    def _extract_dependencies(self, dir_path: str) -> List[str]:
+        """
+        Extract potential dependencies from files in a directory using more robust methods.
+        """
+        dependencies = set()
+        patterns = {
+            "import_require": r"(?:require|import)\s*\(?\s*['\"]([\w-]+)['\"]\s*\)?",
+            "depends_on": r"depends_on\s+['\"]([\w-]+)['\"]",
+            "install_use_package": r"(?:install|use)_package\s*\(\s*['\"]([\w-]+)['\"]\s*\)",
+            "executables": r"\b(fzf|rg|ag|npm|pip|cargo)\b",
+        }
+
+        for root, _, files in os.walk(dir_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        for pattern_name, pattern in patterns.items():
+                            matches = re.findall(pattern, content, re.IGNORECASE)
+                            for match in matches:
+                                if match in self.dependency_db:
+                                    dependencies.add(self.dependency_db[match])
+                                else:
+                                    dependencies.add(match)
+                except UnicodeDecodeError:
+                    if self.verbose:
+                        self.logger.debug(f"Skipping binary file: {file_path}")
+                except Exception as e:
+                    self.logger.error(f"Error analyzing file {file_path}: {e}")
+
+        return list(dependencies)
+
+    def _detect_themes(self, dir_path: str) -> List[str]:
+        """
+        Detect potential themes based on directory structure and file names.
+        """
+        themes = []
+        if os.path.basename(dir_path).lower() in ("themes", "colors", "styles"):
+            for item in os.listdir(dir_path):
+                if os.path.isdir(os.path.join(dir_path, item)):
+                    themes.append(item)
+        return themes

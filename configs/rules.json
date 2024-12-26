@@ -1,13 +1,4 @@
 {
-    "rules":[
-      {
-        "name": "scripts"
-      },
-      {
-        "regex": "^(wallpaper|wallpapers|backgrounds)$"
-      },
-      {
-        "regex": "^(icons|cursors)$"
-      }
-    ]
-  }
+    "theme_dirs": ["themes", "colorschemes", "styles"],
+    "theme_indicators": [".colors-", "-theme.json", "_theme.toml"]
+}

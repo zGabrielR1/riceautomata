@@ -1,6 +1,12 @@
 class RiceAutomataError(Exception):
     """Base exception class for RiceAutomata."""
-    pass
+    def __init__(self, message: str, details: str = None):
+        super().__init__(message)
+        self.details = details
+    def __str__(self):
+        if self.details:
+            return f"{super().__str__()}\nDetails: {self.details}"
+        return super().__str__()
 
 class ConfigurationError(RiceAutomataError):
     """Raised when there's an error in configuration."""
