@@ -1549,3 +1549,35 @@ class DotfileManager:
             self.logger.error(f"Failed to apply profile configuration: {e}")
             return False
         return True
+
+    def _categorize_dotfile_directory(self, path: str) -> str:
+        """Categorize the type of dotfile directory."""
+        name = os.path.basename(path).lower()
+        
+        if name in self.asset_dirs:
+            return "asset"
+        if name in {'bin', 'scripts', 'scriptdata'}:
+            return "script"
+        if name in {'themes', 'styles', 'gtk-3.0', 'gtk-4.0'}:
+            return "theme"
+        if name in self.known_config_dirs:
+            return "config"
+        if 'nix' in name or name.endswith('.nix'):
+            return "nix"
+            
+        return "other"
+
+    def _create_symlink(self, src: str, dst: str) -> bool:
+        """Create a symlink with conflict resolution."""
+        if os.path.exists(dst):
+            if os.path.islink(dst):
+                self.logger.warning(f"Symlink already exists: {dst}")
+                return True
+            else:
+                backup_path = f"{dst}.bak"
+                self.logger.warning(f"File exists, creating backup: {backup_path}")
+                shutil.move(dst, backup_path)
+        
+        os.symlink(src, dst)
+        self.logger.info(f"Created symlink: {dst} -> {src}")
+        return True

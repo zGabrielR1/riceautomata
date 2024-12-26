@@ -180,9 +180,7 @@ class DotfileAnalyzer:
         return min(confidence, 1.0)  # Ensure confidence is between 0 and 1
 
     def _extract_dependencies(self, dir_path: str) -> List[str]:
-        """
-        Extract potential dependencies from files in a directory using more robust methods.
-        """
+        """Extract potential dependencies from files in a directory using more robust methods."""
         dependencies = set()
         patterns = {
             "import_require": r"(?:require|import)\s*\(?\s*['\"]([\w-]+)['\"]\s*\)?",

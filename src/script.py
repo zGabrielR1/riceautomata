@@ -3,6 +3,7 @@ import subprocess
 import os
 from src.utils import setup_logger
 import shlex
+from typing import Dict
 
 logger = setup_logger()
 
@@ -68,4 +69,12 @@ class ScriptRunner:
                   return False
           else:
                self.logger.warning(f"{phase} script not found: {full_script_path}")
+        return True
+
+    def run_post_install_scripts(self, local_dir: str, env: Dict[str, str] = None) -> bool:
+        """Run post-install scripts."""
+        scripts = self._discover_scripts(local_dir).get("post_install", [])
+        for script in scripts:
+            if not self.run_script(script, cwd=local_dir, env=env):
+                return False
         return True
