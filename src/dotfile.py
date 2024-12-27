@@ -21,6 +21,7 @@ import shutil
 from src.file_operations import FileOperations
 import traceback
 from contextlib import contextmanager
+import datetime
 
 from src.utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from src.config import ConfigManager
@@ -1223,361 +1224,349 @@ class DotfileManager:
                 self.logger.error(f"Failed to install Nix: {e}")
                 return False
 
-    def _detect_package_dependencies(self, config_file: str) -> List[str]:
-        """Detect package dependencies from various config file formats"""
-        dependencies = set()
-        
-        if not os.path.exists(config_file):
-            return list(dependencies)
-            
-        with open(config_file, 'r') as f:
-            content = f.read()
-            
-        # Common package patterns
-        patterns = [
-            r'requires\s*=\s*[\'"](.*?)[\'"]',  # Python style
-            r'depends\s*=\s*[\'"](.*?)[\'"]',   # PKGBUILD style
-            r'package\s*:\s*(.*?)$',            # YAML style
-            r'\"dependencies\":\s*{([^}]*)}',   # package.json style
-        ]
-        
-        for pattern in patterns:
-            matches = re.finditer(pattern, content, re.MULTILINE)
-            for match in matches:
-                deps = match.group(1).split()
-                dependencies.update(deps)
-                
-        return list(dependencies)
-
-    def _check_system_compatibility(self) -> Dict[str, bool]:
-        """Check system compatibility for the rice installation"""
-        compatibility = {
-            'nix_support': False,
-            'stow_available': False,
-            'xorg_present': False,
-            'wayland_present': False,
-            'package_manager': None
+    def _detect_package_dependencies(self, config_file: str) -> Dict[str, list]:
+        """Enhanced detection of package dependencies from various config file formats"""
+        dependencies = {
+            'system': set(),  # System-level dependencies
+            'packages': set(),  # Package manager dependencies
+            'fonts': set(),  # Font dependencies
+            'services': set(),  # System services
+            'optional': set()  # Optional enhancements
         }
         
-        # Check for Nix
+        if not os.path.exists(config_file):
+            return {k: list(v) for k, v in dependencies.items()}
+            
         try:
-            subprocess.run(['nix', '--version'], capture_output=True)
-            compatibility['nix_support'] = True
-        except FileNotFoundError:
-            pass
-            
-        # Check for GNU Stow
-        try:
-            subprocess.run(['stow', '--version'], capture_output=True)
-            compatibility['stow_available'] = True
-        except FileNotFoundError:
-            pass
-            
-        # Detect display server
-        if os.environ.get('WAYLAND_DISPLAY'):
-            compatibility['wayland_present'] = True
-        elif os.environ.get('DISPLAY'):
-            compatibility['xorg_present'] = True
-            
-        # Detect package manager
-        for pm in ['pacman', 'apt', 'dnf', 'zypper']:
-            try:
-                subprocess.run([pm, '--version'], capture_output=True)
-                compatibility['package_manager'] = pm
-                break
-            except FileNotFoundError:
-                continue
+            with open(config_file, 'r') as f:
+                content = f.read()
                 
-        return compatibility
-
-    async def _parallel_install_dependencies(self, dependencies: List[str]):
-        """Install dependencies in parallel for faster deployment"""
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
+            file_ext = os.path.splitext(config_file)[1].lower()
+            
+            # Parse based on file type
+            if file_ext in ['.json', '.jsonc']:
+                self._parse_json_dependencies(content, dependencies)
+            elif file_ext in ['.yaml', '.yml']:
+                self._parse_yaml_dependencies(content, dependencies)
+            elif file_ext == '.toml':
+                self._parse_toml_dependencies(content, dependencies)
+            elif file_ext in ['.conf', '.ini']:
+                self._parse_ini_dependencies(content, dependencies)
+            elif 'pkgbuild' in os.path.basename(config_file).lower():
+                self._parse_pkgbuild_dependencies(content, dependencies)
+            elif file_ext == '.nix':
+                self._parse_nix_dependencies(content, dependencies)
+            
+            # Analyze shell scripts for common package usage patterns
+            if file_ext in ['.sh', '.bash', '.zsh']:
+                self._analyze_shell_dependencies(content, dependencies)
+            
+            # Check for common desktop environment dependencies
+            self._detect_de_dependencies(content, dependencies)
+            
+            # Check for font dependencies
+            self._detect_font_dependencies(content, dependencies)
+            
+            # Check for service dependencies
+            self._detect_service_dependencies(content, dependencies)
+            
+        except Exception as e:
+            self.logger.warning(f"Error parsing dependencies in {config_file}: {e}")
+            
+        return {k: list(v) for k, v in dependencies.items()}
         
-        async def install_pkg(pkg: str):
-            try:
-                if self.system_info['package_manager'] == 'pacman':
-                    cmd = ['pacman', '-S', '--noconfirm', pkg]
-                elif self.system_info['package_manager'] == 'apt':
-                    cmd = ['apt', 'install', '-y', pkg]
-                else:
-                    return False
+    def _parse_json_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Parse JSON-format dependency declarations"""
+        try:
+            data = json.loads(content)
+            # Check package.json style dependencies
+            if isinstance(data, dict):
+                for key in ['dependencies', 'devDependencies', 'peerDependencies']:
+                    if key in data and isinstance(data[key], dict):
+                        dependencies['packages'].update(data[key].keys())
+                        
+                # Check for system requirements
+                if 'system' in data:
+                    dependencies['system'].update(data.get('system', []))
                     
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await proc.communicate()
-                return proc.returncode == 0
-            except Exception as e:
-                self.logger.error(f"Failed to install {pkg}: {str(e)}")
-                return False
-                
-        with ThreadPoolExecutor() as executor:
-            tasks = [install_pkg(dep) for dep in dependencies]
-            results = await asyncio.gather(*tasks)
+                # Check for optional enhancements
+                if 'optional' in data:
+                    dependencies['optional'].update(data.get('optional', []))
+        except:
+            pass
             
-        return all(results)
+    def _parse_yaml_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Parse YAML-format dependency declarations"""
+        try:
+            import yaml
+            data = yaml.safe_load(content)
+            if isinstance(data, dict):
+                # Common YAML dependency keys
+                dep_keys = ['dependencies', 'requires', 'packages', 'system']
+                for key in dep_keys:
+                    if key in data:
+                        if isinstance(data[key], list):
+                            dependencies['packages'].update(data[key])
+                        elif isinstance(data[key], dict):
+                            dependencies['packages'].update(data[key].keys())
+        except:
+            pass
+            
+    def _parse_toml_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Parse TOML-format dependency declarations"""
+        try:
+            import toml
+            data = toml.loads(content)
+            if isinstance(data, dict):
+                # Check for dependencies table
+                if 'dependencies' in data:
+                    dependencies['packages'].update(data['dependencies'].keys())
+                # Check for build-dependencies
+                if 'build-dependencies' in data:
+                    dependencies['packages'].update(data['build-dependencies'].keys())
+        except:
+            pass
+                
+    def _analyze_shell_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Analyze shell scripts for package usage patterns"""
+        # Common package manager commands
+        pm_patterns = {
+            'apt': r'apt-get\s+install\s+([^\n]+)',
+            'pacman': r'pacman\s+-S\s+([^\n]+)',
+            'dnf': r'dnf\s+install\s+([^\n]+)',
+            'yum': r'yum\s+install\s+([^\n]+)',
+            'brew': r'brew\s+install\s+([^\n]+)'
+        }
+        
+        for pattern in pm_patterns.values():
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                packages = match.group(1).split()
+                dependencies['packages'].update(packages)
+                
+    def _detect_de_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Detect desktop environment related dependencies"""
+        de_patterns = {
+            'i3': ['i3-wm', 'i3status', 'i3blocks', 'i3lock'],
+            'awesome': ['awesome', 'awesome-extra'],
+            'xfce': ['xfce4', 'xfce4-goodies'],
+            'kde': ['plasma-desktop', 'kde-standard'],
+            'gnome': ['gnome-shell', 'gnome-session']
+        }
+        
+        for de, deps in de_patterns.items():
+            if de.lower() in content.lower():
+                dependencies['packages'].update(deps)
+                
+    def _detect_font_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Detect font dependencies"""
+        font_patterns = [
+            r'font-family:\s*[\'"]([^\'"]+)[\'"]',
+            r'fonts-\w+',
+            r'ttf-\w+',
+            r'otf-\w+'
+        ]
+        
+        for pattern in font_patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                dependencies['fonts'].add(match.group(1))
+                
+    def _detect_service_dependencies(self, content: str, dependencies: Dict[str, set]):
+        """Detect system service dependencies"""
+        service_patterns = [
+            r'systemctl\s+(?:start|enable)\s+(\w+)',
+            r'service\s+(\w+)\s+start',
+            r'initctl\s+start\s+(\w+)'
+        ]
+        
+        for pattern in service_patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                dependencies['services'].add(match.group(1))
 
-    def apply_rice_automated(self, rice_path: str):
-        """Fully automated rice installation process"""
+    def apply_rice_automated(self, rice_path: str) -> bool:
+        """Fully automated rice installation process with enhanced detection and validation"""
         try:
             # 1. System compatibility check
-            self.system_info = self._check_system_compatibility()
+            self.logger.info("Checking system compatibility...")
+            compatibility = self._check_system_compatibility()
             
-            # 2. Analyze rice structure
-            rice_analysis = self.analyze_rice_directory(rice_path)
+            # Validate minimum requirements
+            if not self._validate_minimum_requirements(compatibility):
+                return False
+            
+            # 2. Analyze rice structure and dependencies
+            self.logger.info("Analyzing rice configuration...")
+            analyzer = DotfileAnalyzer()
+            rice_analysis = analyzer.analyze_rice_directory(rice_path)
             
             # 3. Detect and collect all dependencies
-            all_deps = set()
+            self.logger.info("Detecting dependencies...")
+            all_deps = {
+                'system': set(),
+                'packages': set(),
+                'fonts': set(),
+                'services': set(),
+                'optional': set()
+            }
+            
             for config_file in rice_analysis['config_files']:
-                deps = self._detect_package_dependencies(config_file)
-                all_deps.update(deps)
-                
-            # 4. Install dependencies
-            if all_deps:
-                asyncio.run(self._parallel_install_dependencies(list(all_deps)))
-                
-            # 5. Determine installation strategy
-            if self.system_info['nix_support'] and rice_analysis['has_nix_config']:
-                self._apply_nix_config(rice_path, self.system_info['package_manager'])
-            elif self.system_info['stow_available']:
-                # We need to analyze the dotfile structure before using stow
-                tree = DotfileTree()
-                root = tree.build_tree(rice_path)
-
-                dotfile_dirs = {}
-                def traverse_tree(node):
-                   if node.is_dotfile:
-                      rel_path = os.path.relpath(node.path, rice_path)
-                      category = self._categorize_dotfile_directory(node.path)
-                      dotfile_dirs[rel_path] = category
-                   for child in node.children:
-                      traverse_tree(child)
-                traverse_tree(root)
-
-                # Apply directories
-                for directory, category in dotfile_dirs.items():
-                     if category == "config":
-                        self._apply_config_directory(rice_path, directory)
-                     elif category == "cache":
-                        self._apply_cache_directory(rice_path, directory)
-                     elif category == "local":
-                        self._apply_local_directory(rice_path, directory)
-                     else:
-                         self._apply_other_directory(rice_path, directory)
+                deps = analyzer.analyze_dependencies(config_file)
+                for key in all_deps:
+                    all_deps[key].update(deps.get(key, []))
+            
+            # 4. Validate dependencies against system compatibility
+            self.logger.info("Validating dependencies...")
+            if not self._validate_dependencies(all_deps, compatibility):
+                return False
+            
+            # 5. Create backup of existing configuration
+            self.logger.info("Creating backup of existing configuration...")
+            if not self._backup_existing_config(rice_path):
+                return False
+            
+            # 6. Install system dependencies first
+            if all_deps['system']:
+                self.logger.info("Installing system dependencies...")
+                if not self._install_system_dependencies(list(all_deps['system']), compatibility):
+                    self._rollback_changes()
+                    return False
+            
+            # 7. Install package dependencies
+            if all_deps['packages']:
+                self.logger.info("Installing package dependencies...")
+                if not self._install_package_dependencies(list(all_deps['packages']), compatibility):
+                    self._rollback_changes()
+                    return False
+            
+            # 8. Install and configure fonts
+            if all_deps['fonts']:
+                self.logger.info("Setting up fonts...")
+                if not self._setup_fonts(list(all_deps['fonts']), compatibility):
+                    self._rollback_changes()
+                    return False
+            
+            # 9. Determine and apply installation strategy
+            self.logger.info("Applying rice configuration...")
+            if compatibility['nix_support'] and rice_analysis['has_nix_config']:
+                if not self._apply_nix_config(rice_path, compatibility['package_manager']):
+                    self._rollback_changes()
+                    return False
+            elif compatibility['stow_available']:
+                if not self._apply_stow_configuration(rice_path, rice_analysis):
+                    self._rollback_changes()
+                    return False
             else:
-                #Apply a complex structure
-                self._apply_complex_structure(rice_path)
-                
-            # 6. Apply post-installation configuration
+                if not self._apply_manual_configuration(rice_path, rice_analysis):
+                    self._rollback_changes()
+                    return False
+            
+            # 10. Setup and enable required services
+            if all_deps['services']:
+                self.logger.info("Setting up system services...")
+                if not self._setup_services(list(all_deps['services']), compatibility):
+                    self._rollback_changes()
+                    return False
+            
+            # 11. Apply post-installation configuration
             if rice_analysis['post_install_scripts']:
-                self._execute_scripts(rice_analysis['post_install_scripts'])
-                
+                self.logger.info("Running post-installation scripts...")
+                if not self._execute_scripts(rice_analysis['post_install_scripts']):
+                    self._rollback_changes()
+                    return False
+            
+            # 12. Verify installation
+            self.logger.info("Verifying installation...")
+            if not self._verify_installation(rice_path, rice_analysis, all_deps):
+                self._rollback_changes()
+                return False
+            
+            self.logger.info("Rice installation completed successfully!")
             return True
-                
+            
         except Exception as e:
             self.logger.error(f"Failed to install rice: {str(e)}")
             self._rollback_changes()
             return False
-
-    def _apply_config_directory(self, rice_path: str, directory: str):
-        """Apply configuration directory with enhanced handling"""
-        src = os.path.join(rice_path, directory)
-        category = self._categorize_dotfile_directory(src)
-        
-        if category == "asset":
-            # Handle assets (wallpapers, icons, etc.)
-            target_dir = os.path.expanduser(f"~/.local/share/{os.path.basename(src)}")
-            os.makedirs(target_dir, exist_ok=True)
-            self._copy_assets(src, target_dir)
-        elif category == "theme":
-            # Handle themes and styles
-            self._apply_theme_directory(src)
-        elif category == "nix":
-            # Handle Nix configurations
-            self._apply_nix_config(src)
-        else:
-            # Default config handling
-            target = os.path.expanduser(f"~/.config/{os.path.basename(src)}")
-            self._create_symlink(src, target)
-
-    def _copy_assets(self, src_dir: str, target_dir: str):
-        """Copy asset files while preserving structure"""
-        try:
-            for root, _, files in os.walk(src_dir):
-                rel_path = os.path.relpath(root, src_dir)
-                target_path = os.path.join(target_dir, rel_path)
-                os.makedirs(target_path, exist_ok=True)
-                
-                for file in files:
-                    src_file = os.path.join(root, file)
-                    target_file = os.path.join(target_path, file)
-                    shutil.copy2(src_file, target_file)
-                    
-            self.logger.info(f"Copied assets from {src_dir} to {target_dir}")
-        except Exception as e:
-            self.logger.error(f"Failed to copy assets: {e}")
-            raise FileOperationError(f"Failed to copy assets: {e}")
-
-    def _apply_theme_directory(self, theme_dir: str):
-        """Apply theme configurations"""
-        name = os.path.basename(theme_dir).lower()
-        
-        if name in {'gtk-3.0', 'gtk-4.0'}:
-            target = os.path.expanduser(f"~/.config/{name}")
-        else:
-            # Handle other theme types
-            target = os.path.expanduser("~/.local/share/themes")
             
-        os.makedirs(target, exist_ok=True)
-        self._create_symlink(theme_dir, target)
-
-    def _manage_profiles(self, local_dir: str, profile_name: str = None, action: str = "apply") -> bool:
-        """
-        Manage dotfile profiles for different configurations.
-        
-        Args:
-            local_dir: The local directory containing the dotfiles
-            profile_name: Name of the profile to manage
-            action: Action to perform (apply/save/list/delete)
-            
-        Returns:
-            bool: True if the operation was successful
-        """
-        try:
-            profiles_dir = os.path.join(local_dir, ".profiles")
-            os.makedirs(profiles_dir, exist_ok=True)
-            
-            if action == "list":
-                profiles = [f.replace(".json", "") for f in os.listdir(profiles_dir) if f.endswith(".json")]
-                if not profiles:
-                    self.logger.info("No profiles found")
-                else:
-                    self.logger.info(f"Available profiles: {', '.join(profiles)}")
-                return True
-                
-            if not profile_name:
-                self.logger.error("Profile name is required for this operation")
-                return False
-                
-            profile_path = os.path.join(profiles_dir, f"{profile_name}.json")
-            
-            if action == "save":
-                # Save current configuration as a profile
-                config = {
-                    "dotfiles": self._get_current_dotfile_state(),
-                    "packages": self._get_installed_packages(),
-                    "templates": self._get_template_variables(),
-                    "timestamp": create_timestamp()
-                }
-                with open(profile_path, 'w') as f:
-                    json.dump(config, f, indent=2)
-                self.logger.info(f"Saved profile: {profile_name}")
-                return True
-                
-            elif action == "apply":
-                if not os.path.exists(profile_path):
-                    self.logger.error(f"Profile not found: {profile_name}")
-                    return False
-                    
-                with open(profile_path, 'r') as f:
-                    config = json.load(f)
-                
-                # Apply the profile configuration
-                with _error_context("profile_application"):
-                    success = self._apply_profile_configuration(config)
-                    if success:
-                        self.logger.info(f"Successfully applied profile: {profile_name}")
-                    return success
-                    
-            elif action == "delete":
-                if os.path.exists(profile_path):
-                    os.remove(profile_path)
-                    self.logger.info(f"Deleted profile: {profile_name}")
-                    return True
-                self.logger.error(f"Profile not found: {profile_name}")
-                return False
-                
-            else:
-                self.logger.error(f"Unknown profile action: {action}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Failed to manage profile: {e}")
-            self.logger.debug(traceback.format_exc())
+    def _validate_minimum_requirements(self, compatibility: Dict[str, Any]) -> bool:
+        """Validate minimum system requirements"""
+        # Check for display server
+        if not (compatibility['xorg_present'] or compatibility['wayland_present']):
+            self.logger.error("No display server detected. X11 or Wayland is required.")
             return False
             
-    def _get_current_dotfile_state(self) -> dict:
-        """Get the current state of dotfiles."""
-        state = {}
-        try:
-            # Implement logic to capture current dotfile state
-            # This should include symlinks, file permissions, etc.
-            pass
-        except Exception as e:
-            self.logger.error(f"Failed to get dotfile state: {e}")
-        return state
-        
-    def _get_installed_packages(self) -> List[str]:
-        """Get list of installed packages."""
-        try:
-            # Implement logic to get installed packages
-            pass
-        except Exception as e:
-            self.logger.error(f"Failed to get installed packages: {e}")
-        return []
-        
-    def _get_template_variables(self) -> dict:
-        """Get current template variables."""
-        try:
-            # Implement logic to get template variables
-            pass
-        except Exception as e:
-            self.logger.error(f"Failed to get template variables: {e}")
-        return {}
-        
-    def _apply_profile_configuration(self, config: dict) -> bool:
-        """Apply a profile configuration."""
-        try:
-            # Implement logic to apply profile configuration
-            # This should handle dotfiles, packages, and templates
-            pass
-        except Exception as e:
-            self.logger.error(f"Failed to apply profile configuration: {e}")
+        # Check for package manager
+        if not compatibility['package_manager']:
+            self.logger.error("No supported package manager found.")
             return False
+            
+        # Check for minimum disk space (1GB)
+        if compatibility['available_disk_space'] and compatibility['available_disk_space'] < 1_000_000_000:
+            self.logger.error("Insufficient disk space. At least 1GB is required.")
+            return False
+            
         return True
-
-    def _categorize_dotfile_directory(self, path: str) -> str:
-        """Categorize the type of dotfile directory."""
-        name = os.path.basename(path).lower()
         
-        if name in self.asset_dirs:
-            return "asset"
-        if name in {'bin', 'scripts', 'scriptdata'}:
-            return "script"
-        if name in {'themes', 'styles', 'gtk-3.0', 'gtk-4.0'}:
-            return "theme"
-        if name in self.known_config_dirs:
-            return "config"
-        if 'nix' in name or name.endswith('.nix'):
-            return "nix"
+    def _validate_dependencies(self, dependencies: Dict[str, set], compatibility: Dict[str, Any]) -> bool:
+        """Validate dependencies against system compatibility"""
+        # Check if Nix is required but not available
+        if any('nix' in dep.lower() for dep in dependencies['system']) and not compatibility['nix_support']:
+            self.logger.error("Rice requires Nix but Nix is not available on the system.")
+            return False
             
-        return "other"
-
-    def _create_symlink(self, src: str, dst: str) -> bool:
-        """Create a symlink with conflict resolution."""
-        if os.path.exists(dst):
-            if os.path.islink(dst):
-                self.logger.warning(f"Symlink already exists: {dst}")
-                return True
-            else:
-                backup_path = f"{dst}.bak"
-                self.logger.warning(f"File exists, creating backup: {backup_path}")
-                shutil.move(dst, backup_path)
+        # Check if systemd services are required but systemd is not available
+        if dependencies['services'] and not compatibility['systemd_available']:
+            self.logger.error("Rice requires systemd services but systemd is not available.")
+            return False
+            
+        # Check desktop environment compatibility
+        de_deps = {dep for dep in dependencies['packages'] if any(de in dep.lower() for de in ['gnome', 'kde', 'xfce', 'i3', 'awesome'])}
+        if de_deps and not compatibility['desktop_environment']:
+            self.logger.warning("Rice includes desktop environment components but no desktop environment detected.")
+            
+        return True
         
-        os.symlink(src, dst)
-        self.logger.info(f"Created symlink: {dst} -> {src}")
+    def _backup_existing_config(self, rice_path: str) -> bool:
+        """Create backup of existing configuration"""
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_dir = os.path.expanduser(f"~/.config/riceautomata/backups/{timestamp}")
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Backup existing config files
+            config_dirs = ['.config', '.local/share', '.themes', '.icons']
+            for dir_name in config_dirs:
+                src_dir = os.path.expanduser(f"~/{dir_name}")
+                if os.path.exists(src_dir):
+                    dst_dir = os.path.join(backup_dir, dir_name)
+                    shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to create backup: {e}")
+            return False
+            
+    def _verify_installation(self, rice_path: str, rice_analysis: Dict[str, Any], dependencies: Dict[str, set]) -> bool:
+        """Verify the rice installation"""
+        # Check if all required files are in place
+        for config_file in rice_analysis['config_files']:
+            target_path = os.path.expanduser(f"~/.config/{os.path.basename(config_file)}")
+            if not os.path.exists(target_path):
+                self.logger.error(f"Configuration file not installed: {target_path}")
+                return False
+        
+        # Verify package installations
+        for package in dependencies['packages']:
+            if not self._check_package_installed(package):
+                self.logger.error(f"Package not properly installed: {package}")
+                return False
+        
+        # Verify services
+        for service in dependencies['services']:
+            if not self._check_service_active(service):
+                self.logger.error(f"Service not properly enabled: {service}")
+                return False
+        
         return True

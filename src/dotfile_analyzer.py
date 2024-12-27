@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing import Dict, List, Tuple
 from src.utils import setup_logger
 
@@ -220,3 +221,164 @@ class DotfileAnalyzer:
                 if os.path.isdir(os.path.join(dir_path, item)):
                     themes.append(item)
         return themes
+
+    def analyze_dependencies(self, config_file: str) -> Dict[str, List[str]]:
+        """Enhanced detection of package dependencies from various config file formats"""
+        dependencies = {
+            'system': set(),  # System-level dependencies
+            'packages': set(),  # Package manager dependencies
+            'fonts': set(),  # Font dependencies
+            'services': set(),  # System services
+            'optional': set()  # Optional enhancements
+        }
+        
+        if not os.path.exists(config_file):
+            return {k: list(v) for k, v in dependencies.items()}
+            
+        try:
+            with open(config_file, 'r') as f:
+                content = f.read()
+                
+            file_ext = os.path.splitext(config_file)[1].lower()
+            
+            # Parse based on file type
+            if file_ext in ['.json', '.jsonc']:
+                self._parse_json_dependencies(content, dependencies)
+            elif file_ext in ['.yaml', '.yml']:
+                self._parse_yaml_dependencies(content, dependencies)
+            elif file_ext == '.toml':
+                self._parse_toml_dependencies(content, dependencies)
+            elif file_ext in ['.conf', '.ini']:
+                self._parse_ini_dependencies(content, dependencies)
+            elif 'pkgbuild' in os.path.basename(config_file).lower():
+                self._parse_pkgbuild_dependencies(content, dependencies)
+            elif file_ext == '.nix':
+                self._parse_nix_dependencies(content, dependencies)
+            
+            # Analyze shell scripts for common package usage patterns
+            if file_ext in ['.sh', '.bash', '.zsh']:
+                self._analyze_shell_dependencies(content, dependencies)
+            
+            # Check for common desktop environment dependencies
+            self._detect_de_dependencies(content, dependencies)
+            
+            # Check for font dependencies
+            self._detect_font_dependencies(content, dependencies)
+            
+            # Check for service dependencies
+            self._detect_service_dependencies(content, dependencies)
+            
+        except Exception as e:
+            self.logger.warning(f"Error parsing dependencies in {config_file}: {e}")
+            
+        return {k: list(v) for k, v in dependencies.items()}
+        
+    def _parse_json_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Parse JSON-format dependency declarations"""
+        try:
+            data = json.loads(content)
+            # Check package.json style dependencies
+            if isinstance(data, dict):
+                for key in ['dependencies', 'devDependencies', 'peerDependencies']:
+                    if key in data and isinstance(data[key], dict):
+                        dependencies['packages'].update(data[key].keys())
+                        
+                # Check for system requirements
+                if 'system' in data:
+                    dependencies['system'].update(data.get('system', []))
+                    
+                # Check for optional enhancements
+                if 'optional' in data:
+                    dependencies['optional'].update(data.get('optional', []))
+        except:
+            pass
+            
+    def _parse_yaml_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Parse YAML-format dependency declarations"""
+        try:
+            import yaml
+            data = yaml.safe_load(content)
+            if isinstance(data, dict):
+                # Common YAML dependency keys
+                dep_keys = ['dependencies', 'requires', 'packages', 'system']
+                for key in dep_keys:
+                    if key in data:
+                        if isinstance(data[key], list):
+                            dependencies['packages'].update(data[key])
+                        elif isinstance(data[key], dict):
+                            dependencies['packages'].update(data[key].keys())
+        except:
+            pass
+            
+    def _parse_toml_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Parse TOML-format dependency declarations"""
+        try:
+            import toml
+            data = toml.loads(content)
+            if isinstance(data, dict):
+                # Check for dependencies table
+                if 'dependencies' in data:
+                    dependencies['packages'].update(data['dependencies'].keys())
+                # Check for build-dependencies
+                if 'build-dependencies' in data:
+                    dependencies['packages'].update(data['build-dependencies'].keys())
+        except:
+            pass
+            
+    def _analyze_shell_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Analyze shell scripts for package usage patterns"""
+        # Common package manager commands
+        pm_patterns = {
+            'apt': r'apt-get\s+install\s+([^\n]+)',
+            'pacman': r'pacman\s+-S\s+([^\n]+)',
+            'dnf': r'dnf\s+install\s+([^\n]+)',
+            'yum': r'yum\s+install\s+([^\n]+)',
+            'brew': r'brew\s+install\s+([^\n]+)'
+        }
+        
+        for pattern in pm_patterns.values():
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                packages = match.group(1).split()
+                dependencies['packages'].update(packages)
+                
+    def _detect_de_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Detect desktop environment related dependencies"""
+        de_patterns = {
+            'i3': ['i3-wm', 'i3status', 'i3blocks', 'i3lock'],
+            'awesome': ['awesome', 'awesome-extra'],
+            'xfce': ['xfce4', 'xfce4-goodies'],
+            'kde': ['plasma-desktop', 'kde-standard'],
+            'gnome': ['gnome-shell', 'gnome-session']
+        }
+        
+        for de, deps in de_patterns.items():
+            if de.lower() in content.lower():
+                dependencies['packages'].update(deps)
+                
+    def _detect_font_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Detect font dependencies"""
+        font_patterns = [
+            r'font-family:\s*[\'"]([^\'"]+)[\'"]',
+            r'fonts-\w+',
+            r'ttf-\w+',
+            r'otf-\w+'
+        ]
+        
+        for pattern in font_patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                dependencies['fonts'].add(match.group(1))
+                
+    def _detect_service_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
+        """Detect system service dependencies"""
+        service_patterns = [
+            r'systemctl\s+(?:start|enable)\s+(\w+)',
+            r'service\s+(\w+)\s+start',
+            r'initctl\s+start\s+(\w+)'
+        ]
+        
+        for pattern in service_patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                dependencies['services'].add(match.group(1))

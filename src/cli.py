@@ -51,6 +51,10 @@ Examples:
     apply_parser.add_argument("repository_name", help="Name of the repository to apply")
     apply_parser.add_argument("-p", "--profile", help="Profile to use")
     apply_parser.add_argument("-t", "--target-packages", help="Comma-separated list of packages to configure")
+    apply_parser.add_argument("--auto", action="store_true", help="Enable fully automated installation with enhanced detection")
+    apply_parser.add_argument("--no-backup", action="store_true", help="Skip creating backup of existing configuration")
+    apply_parser.add_argument("--force", action="store_true", help="Force installation even if validation fails")
+    apply_parser.add_argument("--skip-verify", action="store_true", help="Skip post-installation verification")
     apply_parser.add_argument("--stow-options", help="Space-separated GNU Stow options")
     apply_parser.add_argument("--templates", action="store_true", help="Process template files")
     apply_parser.add_argument("--custom-paths", help="Comma-separated list of custom paths")
@@ -142,7 +146,43 @@ Examples:
                 logger.error(f"Failed to clone repository: {repository_url}")
                 sys.exit(1)
 
-        elif args.command in ["apply", "manage"]:
+        elif args.command in ["apply", "-A"]:
+            try:
+                if args.auto:
+                    logger.info(f"Starting automated installation for repository: {args.repository_name}")
+                    config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+                    if not config:
+                        logger.error(f"No configuration found for repository: {args.repository_name}")
+                        sys.exit(1)
+                    
+                    local_dir = config.get('local_directory')
+                    if not local_dir:
+                        logger.error("Local directory not found in configuration")
+                        sys.exit(1)
+                    
+                    # Apply automated installation with options
+                    success = dotfile_manager.apply_rice_automated(
+                        local_dir,
+                        skip_backup=args.no_backup,
+                        force=args.force,
+                        skip_verify=args.skip_verify
+                    )
+                    
+                    if not success:
+                        logger.error("Automated installation failed")
+                        sys.exit(1)
+                        
+                    logger.info("Automated installation completed successfully")
+                    
+                else:
+                    # Original manual installation logic
+                    _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
+                    
+            except Exception as e:
+                logger.error(f"An error occurred during installation: {e}")
+                sys.exit(1)
+
+        elif args.command == "manage":
             is_manage = args.command == "manage"
             _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, is_manage)
 
