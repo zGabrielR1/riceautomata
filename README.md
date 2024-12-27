@@ -1,6 +1,6 @@
 # RiceAutomata
 
-A powerful command-line tool for managing dotfiles and system configurations on Linux/Unix systems.
+A powerful command-line tool for managing dotfiles and system configurations on Linux/Unix systems, with enhanced automated installation capabilities.
 
 ## Installation
 
@@ -24,10 +24,13 @@ RiceAutomata provides a simple command-line interface for managing your dotfiles
 # Clone a dotfiles repository
 riceautomata clone https://github.com/user/dotfiles
 
-# Apply dotfiles from a repository
-riceautomata apply my-dotfiles
+# Apply dotfiles with automated installation (recommended)
+riceautomata apply my-dotfiles --auto
 
-# Apply dotfiles with a specific profile
+# Apply dotfiles with specific options
+riceautomata apply my-dotfiles --auto --no-backup --force
+
+# Apply dotfiles manually with a specific profile
 riceautomata apply my-dotfiles -p minimal
 
 # Manage dotfiles (uninstall previous, apply new)
@@ -57,6 +60,12 @@ riceautomata diff my-dotfiles -p minimal
 # Search for configurations
 riceautomata search "polybar" --content  # Search in file contents
 riceautomata search "i3" -r my-dotfiles  # Search in specific repository
+
+# Export configuration
+riceautomata export my-dotfiles --include-deps --include-assets
+
+# Import configuration
+riceautomata import rice-export.json --name new-rice
 ```
 
 ### Command Options
@@ -67,6 +76,10 @@ riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 #### Apply/Manage Options
 - `-p, --profile`: Specify profile to use
 - `-t, --target-packages`: Comma-separated list of packages to configure
+- `--auto`: Enable fully automated installation with enhanced detection
+- `--no-backup`: Skip creating backup of existing configuration
+- `--force`: Force installation even if validation fails
+- `--skip-verify`: Skip post-installation verification
 - `--stow-options`: Space-separated GNU Stow options
 - `--templates`: Process template files
 - `--custom-paths`: Comma-separated list of custom paths
@@ -84,6 +97,16 @@ riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 - `-r, --repository`: Limit search to specific repository
 - `--content`: Search in file contents
 
+#### Export Options
+- `-o, --output`: Output file path
+- `--include-deps`: Include dependency information
+- `--include-assets`: Include asset information
+
+#### Import Options
+- `-n, --name`: Name for the imported configuration
+- `--skip-deps`: Skip dependency installation
+- `--skip-assets`: Skip asset installation
+
 ## Features
 
 ### Core Features
@@ -100,12 +123,32 @@ riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 - **Smart Directory Analysis**: Intelligent detection of dotfile directories
 
 ### Advanced Features
+- **Automated Installation**: 
+  - System compatibility detection
+  - Intelligent dependency analysis
+  - Automatic backup creation
+  - Post-installation verification
+  - Rollback on failure
+- **Enhanced Dependency Detection**:
+  - Multiple config file format support (JSON, YAML, TOML, INI)
+  - Shell script analysis
+  - Desktop environment detection
+  - Font dependency detection
+  - Service dependency detection
+- **System Compatibility Checks**:
+  - Display server detection (X11/Wayland)
+  - GPU information
+  - Desktop environment detection
+  - Available memory and disk space
+  - Systemd availability
+  - Fonts support
 - **Parallel Processing**: Concurrent package installation and script execution
 - **Profile Management**: Comprehensive profile system with save/load/switch capabilities
 - **Directory Analysis**: Smart scoring and categorization of dotfile directories
 - **Template Processing**: Support for multiple template formats with variable extraction
 - **Error Recovery**: Graceful handling of errors with detailed logging
 - **Progress Tracking**: Real-time progress indicators for all operations
+- **Import/Export**: Portable configuration sharing with dependency and asset handling
 
 ### Development Features
 - **Modular Architecture**: Well-organized codebase with clear separation of concerns
@@ -114,17 +157,11 @@ riceautomata search "i3" -r my-dotfiles  # Search in specific repository
 - **Error Handling**: Robust error handling with context managers
 - **Logging**: Detailed logging system for debugging
 
-### Upcoming Features
-- **Interactive Setup Wizards**: User-friendly initial setup process
-- **State Management**: Consistent application state tracking
-- **Automated Testing**: Comprehensive test suite with CI integration
-- **Configuration Validation**: Advanced validation of user configurations
-- **User-Friendly CLI**: Enhanced command-line interface with better feedback
-
 ## Directory Structure
 ```
 ~/.config/rice-automata/
 ├── config.json         # Main configuration file
+├── backups/           # Directory containing configuration backups
 └── managed-rices/     # Directory containing managed rice configurations
 ```
 
@@ -156,6 +193,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Changelog
 
 ### Latest Changes
+- Added automated installation with enhanced detection (`--auto`)
+- Added comprehensive system compatibility checks
+- Enhanced dependency detection for multiple file formats
+- Added intelligent backup and rollback system
+- Added import/export functionality for sharing configurations
 - Added preview command to show changes before applying
 - Added diff command to compare configurations
 - Added search functionality for finding configurations
