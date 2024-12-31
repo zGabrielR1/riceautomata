@@ -42,6 +42,13 @@ RiceAutomator is a powerful, flexible, and intelligent command-line tool designe
   - GNU Stow integration for symlinking
   - Parallel processing for faster deployment
 
+- **Snapshot System:**
+  - Create checkpoints of your entire rice configuration
+  - Safe experimentation with new themes and configs
+  - Easy rollback to previous working states
+  - Package tracking and restoration
+  - Automatic backup and recovery
+
 - **Additional Features:**
   - Selective package installation
   - Dependency management
@@ -154,6 +161,30 @@ Manages dotfiles with automatic backup and rollback support. Accepts the same op
 ```
 
 Creates a backup with automatic cleanup of old backups.
+
+#### Snapshot Management
+
+Create a snapshot of your current configuration:
+```bash
+riceautomata snapshot create <name> [-d "description"]
+```
+
+List available snapshots:
+```bash
+riceautomata snapshot list
+```
+
+Restore a previous snapshot:
+```bash
+riceautomata snapshot restore <name>
+```
+
+Delete a snapshot:
+```bash
+riceautomata snapshot delete <name>
+```
+
+For detailed information about the snapshot system, see [Snapshot Documentation](snapshots.md).
 
 ### Profile Management
 
