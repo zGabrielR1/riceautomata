@@ -127,6 +127,26 @@ Examples:
     import_parser.add_argument("--skip-deps", action="store_true", help="Skip dependency installation")
     import_parser.add_argument("--skip-assets", action="store_true", help="Skip asset installation")
 
+    # Snapshot commands
+    snapshot_parser = subparsers.add_parser('snapshot', help='Manage system snapshots')
+    snapshot_subparsers = snapshot_parser.add_subparsers(dest='snapshot_command', help='Snapshot commands')
+
+    # Create snapshot
+    create_parser = snapshot_subparsers.add_parser('create', help='Create a new snapshot')
+    create_parser.add_argument('name', help='Name of the snapshot')
+    create_parser.add_argument('-d', '--description', help='Description of the snapshot')
+
+    # Restore snapshot
+    restore_parser = snapshot_subparsers.add_parser('restore', help='Restore a snapshot')
+    restore_parser.add_argument('name', help='Name of the snapshot to restore')
+
+    # List snapshots
+    snapshot_subparsers.add_parser('list', help='List all snapshots')
+
+    # Delete snapshot
+    delete_parser = snapshot_subparsers.add_parser('delete', help='Delete a snapshot')
+    delete_parser.add_argument('name', help='Name of the snapshot to delete')
+
     args = parser.parse_args()
     
     if not args.command:
@@ -489,6 +509,43 @@ Examples:
                                 shutil.copy2(src, dst)
             
             logger.info(f"Successfully imported configuration as: {repo_name}")
+
+        elif args.command == "snapshot":
+            backup_manager = BackupManager()
+            
+            if args.snapshot_command == 'create':
+                if backup_manager.create_snapshot(args.name, args.description):
+                    print(f"{Fore.GREEN}✓ Snapshot '{args.name}' created successfully!{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}✗ Failed to create snapshot '{args.name}'{Style.RESET_ALL}")
+        
+            elif args.snapshot_command == 'restore':
+                if input(f"{Fore.YELLOW}⚠ Are you sure you want to restore snapshot '{args.name}'? This will overwrite your current configuration. (y/N): {Style.RESET_ALL}").lower() == 'y':
+                    if backup_manager.restore_snapshot(args.name):
+                        print(f"{Fore.GREEN}✓ Successfully restored snapshot '{args.name}'!{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}✗ Failed to restore snapshot '{args.name}'{Style.RESET_ALL}")
+        
+            elif args.snapshot_command == 'list':
+                snapshots = backup_manager.list_snapshots()
+                if not snapshots:
+                    print(f"{Fore.YELLOW}No snapshots found.{Style.RESET_ALL}")
+                else:
+                    print(f"\n{Fore.CYAN}📸 Available Snapshots:{Style.RESET_ALL}\n")
+                    for name, info in snapshots.items():
+                        print(f"{Fore.GREEN}• {name}{Style.RESET_ALL}")
+                        print(f"  Created: {info['created_at']}")
+                        if info.get('description'):
+                            print(f"  Description: {info['description']}")
+                        print(f"  Packages: {len(info['packages'])}")
+                        print()
+        
+            elif args.snapshot_command == 'delete':
+                if input(f"{Fore.YELLOW}⚠ Are you sure you want to delete snapshot '{args.name}'? (y/N): {Style.RESET_ALL}").lower() == 'y':
+                    if backup_manager.delete_snapshot(args.name):
+                        print(f"{Fore.GREEN}✓ Successfully deleted snapshot '{args.name}'!{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}✗ Failed to delete snapshot '{args.name}'{Style.RESET_ALL}")
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")
