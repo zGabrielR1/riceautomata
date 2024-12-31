@@ -2,6 +2,10 @@
 
 RiceAutomator is a powerful, flexible, and intelligent command-line tool designed to automate the downloading, installation, and management of dotfiles ("rices") on Linux systems. It goes beyond basic symlinking by providing advanced features like cross-distribution compatibility, intelligent dotfile discovery, selective installation, and robust error handling with automatic rollback capabilities.
 
+```
+Note: This project is currently almos 100% made with ai, mainly through the use of AI Text Editors (Windsurf and Cursor), but also through convos with chatbots directly (Claude 3.5 Sonnet). This project probably DOES NOT WORK) Do not use it for your main environment as of right now.
+```
+
 ## Features
 
 - **Fully Automated Installation:**
