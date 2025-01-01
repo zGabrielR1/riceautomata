@@ -16,11 +16,13 @@ init()  # Initialize colorama for colored output
 
 def print_profiles(profiles: Dict[str, Any], active_profile: str) -> None:
     """Pretty print the profiles information."""
-    print(f"{Fore.GREEN}Active Profile:{Style.RESET_ALL} {active_profile}")
     print(f"\n{Fore.CYAN}Available Profiles:{Style.RESET_ALL}")
     for profile in sorted(profiles.keys()):
-        prefix = "* " if profile == active_profile else "  "
-        print(f"{prefix}{profile}")
+        if profile == active_profile:
+            print(f" * {profile} {Fore.GREEN}(active){Style.RESET_ALL}")
+        else:
+            print(f"   {profile}")
+    print()
 
 def main():
     sys.excepthook = exception_handler
