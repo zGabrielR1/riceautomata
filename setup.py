@@ -1,9 +1,10 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_namespace_packages
 
 setup(
     name="riceautomata",
     version="0.1.0",
-    packages=find_packages(),
+    packages=find_namespace_packages(include=['src.*']),
+    package_dir={'': '.'},
     install_requires=[
         "jsonschema>=4.17.3",
         "jinja2>=3.1.2",
@@ -17,10 +18,9 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'riceautomata=riceautomata.cli:main',
+            'riceautomata=src.cli:main',
         ],
     },
-    package_dir={"riceautomata": "src"},
     author="Gabriel",
     author_email="your.email@example.com",
     description="A powerful command-line tool for managing dotfiles and system configurations",
