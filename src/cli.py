@@ -70,10 +70,10 @@ Examples:
 
     # Manage command
     manage_parser = subparsers.add_parser("manage", aliases=["-m"], 
-        help="Manage dotfiles (uninstall previous, apply new)")
-    manage_parser.add_argument("repository_name", help="Name of the repository to manage")
-    manage_parser.add_argument("-p", "--profile", help="Profile to use")
-    manage_parser.add_argument("-t", "--target-packages", help="Comma-separated list of packages to configure")
+        help="Manage specific dotfiles")
+    manage_parser.add_argument("profile_name", help="Profile to manage")
+    manage_parser.add_argument("--target-files", help="Comma-separated list of files to manage", required=True)
+    manage_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying them")
     manage_parser.add_argument("--stow-options", help="Space-separated GNU Stow options")
 
     # Preview command
@@ -104,6 +104,7 @@ Examples:
     create_profile = profile_subparsers.add_parser("create", help="Create a new profile")
     create_profile.add_argument("repository_name", help="Repository name")
     create_profile.add_argument("profile_name", help="Profile name")
+    create_profile.add_argument("--description", help="Optional description of the profile")
     
     switch_profile = profile_subparsers.add_parser("switch", help="Switch to a profile")
     switch_profile.add_argument("repository_name", help="Repository name")
@@ -111,6 +112,7 @@ Examples:
 
     # Backup commands
     backup_parser = subparsers.add_parser("backup", help="Backup management commands")
+    backup_parser.add_argument("name", nargs="?", help="Optional: Name for the backup")
     backup_subparsers = backup_parser.add_subparsers(dest="backup_command")
     
     create_backup = backup_subparsers.add_parser("create", help="Create a backup")
@@ -155,43 +157,10 @@ Examples:
     delete_parser = snapshot_subparsers.add_parser('delete', help='Delete a snapshot')
     delete_parser.add_argument('name', help='Name of the snapshot to delete')
 
-    # List command
-    list_parser = subparsers.add_parser("list", aliases=["ls"],
+    # List command (with alias)
+    list_parser = subparsers.add_parser("list", aliases=["ls", "list-profiles"],
         help="List all available profiles")
     list_parser.add_argument("repository_name", nargs='?', help="Optional: Name of the repository to list profiles from")
-
-    # List-profiles command (alias for list)
-    list_profiles_parser = subparsers.add_parser("list-profiles", 
-        help="List all available profiles")
-    list_profiles_parser.add_argument("repository_name", nargs='?', help="Optional: Name of the repository to list profiles from")
-
-    # Create command
-    create_parser = subparsers.add_parser("create", help="Create a new profile")
-    create_parser.add_argument("profile_name", help="Name of the new profile")
-    create_parser.add_argument("--description", help="Optional description of the profile")
-
-    # Manage command
-    manage_parser = subparsers.add_parser("manage", help="Manage specific dotfiles")
-    manage_parser.add_argument("profile_name", help="Profile to manage")
-    manage_parser.add_argument("--target-files", help="Comma-separated list of files to manage", required=True)
-    manage_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying them")
-
-    # Backup command (both simple and advanced usage)
-    backup_parser = subparsers.add_parser("backup", help="Backup management commands")
-    backup_parser.add_argument("name", nargs="?", help="Optional: Name for the backup")
-    backup_subparsers = backup_parser.add_subparsers(dest="backup_command")
-    
-    create_backup = backup_subparsers.add_parser("create", help="Create a backup")
-    create_backup.add_argument("repository_name", help="Repository name")
-    create_backup.add_argument("backup_name", help="Backup name")
-    
-    restore_backup = backup_subparsers.add_parser("restore", help="Restore a backup")
-    restore_backup.add_argument("repository_name", help="Repository name")
-    restore_backup.add_argument("backup_name", help="Backup to restore")
-
-    # Restore command (both simple and advanced usage)
-    restore_parser = subparsers.add_parser("restore", help="Restore from a backup")
-    restore_parser.add_argument("backup_name", help="Name of the backup to restore")
 
     args = parser.parse_args()
     
@@ -403,7 +372,10 @@ Examples:
                     for root, _, files in os.walk(directory):
                         for file in files:
                             if fnmatch.fnmatch(file.lower(), f"*{args.query.lower()}*"):
-                                rel_path = os.path.relpath(os.path.join(root, file), local_dir)
+                                rel_path = os.path.relpath(
+                                    os.path.join(root, file),
+                                    local_dir
+                                )
                                 print(f"{Fore.GREEN}Found in filename:{Style.RESET_ALL} {rel_path}")
                                 found_something = True
                             
@@ -465,75 +437,7 @@ Examples:
                 logger.error(f"Error restoring backup: {str(e)}")
                 sys.exit(1)
 
-        elif args.command == "create":
-            try:
-                config_manager = ConfigManager()
-                if config_manager.create_profile("default", args.profile_name):
-                    print(f"{Fore.GREEN}✓ Created new profile: {args.profile_name}{Style.RESET_ALL}")
-                    if args.description:
-                        config_manager.set_rice_config("default", f"profiles.{args.profile_name}.description", args.description)
-                else:
-                    print(f"{Fore.RED}✗ Failed to create profile: {args.profile_name}{Style.RESET_ALL}")
-            except Exception as e:
-                logger.error(f"Error creating profile: {str(e)}")
-                sys.exit(1)
-
-        elif args.command == "manage":
-            try:
-                target_files = [f.strip() for f in args.target_files.split(",")]
-                if args.dry_run:
-                    print(f"{Fore.CYAN}Preview of changes for profile {args.profile_name}:{Style.RESET_ALL}")
-                    for file in target_files:
-                        print(f"Would manage: {file}")
-                else:
-                    dotfile_manager.manage_dotfiles(
-                        "default",
-                        target_packages=target_files,
-                        ignore_rules=True
-                    )
-                    print(f"{Fore.GREEN}✓ Successfully managed files for profile: {args.profile_name}{Style.RESET_ALL}")
-            except Exception as e:
-                logger.error(f"Error managing files: {str(e)}")
-                sys.exit(1)
-
-        elif args.command == "snapshot":
-            backup_manager = BackupManager()
-            
-            if args.snapshot_command == 'create':
-                if backup_manager.create_snapshot(args.name, args.description):
-                    print(f"{Fore.GREEN}✓ Snapshot '{args.name}' created successfully!{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.RED}✗ Failed to create snapshot '{args.name}'{Style.RESET_ALL}")
-        
-            elif args.snapshot_command == 'restore':
-                if input(f"{Fore.YELLOW}⚠ Are you sure you want to restore snapshot '{args.name}'? This will overwrite your current configuration. (y/N): {Style.RESET_ALL}").lower() == 'y':
-                    if backup_manager.restore_snapshot(args.name):
-                        print(f"{Fore.GREEN}✓ Successfully restored snapshot '{args.name}'!{Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.RED}✗ Failed to restore snapshot '{args.name}'{Style.RESET_ALL}")
-        
-            elif args.snapshot_command == 'list':
-                snapshots = backup_manager.list_snapshots()
-                if not snapshots:
-                    print(f"{Fore.YELLOW}No snapshots found.{Style.RESET_ALL}")
-                else:
-                    print(f"\n{Fore.CYAN}📸 Available Snapshots:{Style.RESET_ALL}\n")
-                    for name, info in snapshots.items():
-                        print(f"{Fore.GREEN}• {name}{Style.RESET_ALL}")
-                        print(f"  Created: {info['created_at']}")
-                        if info.get('description'):
-                            print(f"  Description: {info['description']}")
-                        print(f"  Packages: {len(info['packages'])}")
-                        print()
-        
-            elif args.snapshot_command == 'delete':
-                if input(f"{Fore.YELLOW}⚠ Are you sure you want to delete snapshot '{args.name}'? (y/N): {Style.RESET_ALL}").lower() == 'y':
-                    if backup_manager.delete_snapshot(args.name):
-                        print(f"{Fore.GREEN}✓ Successfully deleted snapshot '{args.name}'!{Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.RED}✗ Failed to delete snapshot '{args.name}'{Style.RESET_ALL}")
-
-        elif args.command in ["list", "list-profiles", "ls"]:
+        elif args.command == "list":
             try:
                 config_manager = ConfigManager()
                 if args.repository_name:
