@@ -58,67 +58,62 @@ CONFIG_SCHEMA = {
 
 class ConfigManager:
 
-    def __init__(self, config_dir=DEFAULT_CONFIG_DIR, config_file=DEFAULT_CONFIG_FILE):
-        self.config_dir = sanitize_path(config_dir)
-        self.config_file = sanitize_path(config_file)
-        self.config_data = {}
-        self.logger = setup_logger()  # Initialize logger
+    def __init__(self):
+        self.config_dir = os.path.expanduser("~/.config/riceautomata")
+        self.config_file = os.path.join(self.config_dir, "config.json")
         self._ensure_config_dir()
-        self._load_config()
+        self.config = self._load_config()
 
     def _ensure_config_dir(self):
-        """Creates the config directory if it doesn't exist."""
-        try:
-            if not os.path.exists(self.config_dir):
-                os.makedirs(self.config_dir, exist_ok=True)
-        except Exception as e:
-            raise ConfigurationError(f"Failed to create config directory: {e}")
-
-    def _validate_config(self, config_data: Dict[str, Any]) -> None:
-        """Validates the configuration data against the schema."""
-        try:
-            jsonschema.validate(instance=config_data, schema=CONFIG_SCHEMA)
-        except jsonschema.exceptions.ValidationError as e:
-            raise ValidationError(f"Configuration validation failed: {e.message}")
+        """Ensure the config directory exists."""
+        os.makedirs(self.config_dir, exist_ok=True)
 
     def _load_config(self):
-        """Loads the configuration data from the JSON file with validation."""
-        try:
-            if os.path.exists(self.config_file):
+        """Load the configuration file."""
+        if os.path.exists(self.config_file):
+            try:
                 with open(self.config_file, 'r') as f:
-                    self.config_data = json.load(f)
-                    self._validate_config(self.config_data)
-            else:
-                self.config_data = {
-                    'package_managers': {
-                        'preferred': None,
-                        'installed': [],
-                        'auto_install': False
-                    },
-                    'rices': {}
-                }
-                self._save_config()
-        except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in config file: {e}")
-        except Exception as e:
-            raise ConfigurationError(f"Failed to load configuration: {e}")
+                    return json.load(f)
+            except json.JSONDecodeError:
+                return {'rices': {}}
+        return {'rices': {}}
 
     def _save_config(self):
-        """Saves the configuration data to the JSON file with validation."""
+        """Save the configuration file."""
         try:
-            self._validate_config(self.config_data)
             with open(self.config_file, 'w') as f:
-                json.dump(self.config_data, f, indent=4)
+                json.dump(self.config, f, indent=2)
         except Exception as e:
-            raise ConfigurationError(f"Failed to save configuration: {e}")
+            logger.error(f"Error saving config: {e}")
+
+    def get_rice_config(self, repository_name):
+        """Get configuration for a specific rice."""
+        return self.config['rices'].get(repository_name)
+
+    def add_rice_config(self, repository_name, config):
+        """Add or update configuration for a rice."""
+        if 'rices' not in self.config:
+            self.config['rices'] = {}
+            
+        # Convert paths to absolute paths
+        if 'local_directory' in config:
+            config['local_directory'] = os.path.abspath(config['local_directory'])
+            
+        # Update existing config or add new one
+        if repository_name in self.config['rices']:
+            self.config['rices'][repository_name].update(config)
+        else:
+            self.config['rices'][repository_name] = config
+            
+        self._save_config()
 
     def create_profile(self, repository_name: str, profile_name: str) -> None:
         """Creates a new profile for a repository."""
         try:
-            if repository_name not in self.config_data['rices']:
+            if repository_name not in self.config['rices']:
                 raise ConfigurationError(f"Repository {repository_name} not found")
             
-            rice_config = self.config_data['rices'][repository_name]
+            rice_config = self.config['rices'][repository_name]
             if 'profiles' not in rice_config:
                 rice_config['profiles'] = {}
             
@@ -138,10 +133,10 @@ class ConfigManager:
     def switch_profile(self, repository_name: str, profile_name: str) -> None:
         """Switches to a different profile for a repository."""
         try:
-            if repository_name not in self.config_data['rices']:
+            if repository_name not in self.config['rices']:
                 raise ConfigurationError(f"Repository {repository_name} not found")
             
-            rice_config = self.config_data['rices'][repository_name]
+            rice_config = self.config['rices'][repository_name]
             if 'profiles' not in rice_config or profile_name not in rice_config['profiles']:
                 raise ConfigurationError(f"Profile {profile_name} not found")
             
@@ -153,7 +148,7 @@ class ConfigManager:
     def get_active_profile(self, repository_name: str) -> Optional[Dict[str, Any]]:
         """Gets the active profile configuration for a repository."""
         try:
-            rice_config = self.config_data['rices'].get(repository_name)
+            rice_config = self.config['rices'].get(repository_name)
             if not rice_config:
                 return None
             
@@ -162,37 +157,26 @@ class ConfigManager:
         except Exception as e:
             raise ConfigurationError(f"Failed to get active profile: {e}")
 
-    def get_rice_config(self, repository_name):
-        """Gets configuration data for a given repository."""
-        return self.config_data.get('rices', {}).get(repository_name)
-
-    def add_rice_config(self, repository_name, config):
-        """Adds or updates configuration data for a repository."""
-        if 'rices' not in self.config_data:
-            self.config_data['rices'] = {}
-        self.config_data['rices'][repository_name] = config
-        self._save_config()
-
     def get_package_manager_config(self):
         """Gets the package manager configuration."""
-        if 'package_managers' not in self.config_data:
-            self.config_data['package_managers'] = {
+        if 'package_managers' not in self.config:
+            self.config['package_managers'] = {
                 'preferred': None,
                 'installed': [],
                 'auto_install': False
             }
             self._save_config()
-        return self.config_data['package_managers']
+        return self.config['package_managers']
 
     def set_package_manager_config(self, preferred=None, installed=None, auto_install=None):
         """Updates the package manager configuration."""
-        if 'package_managers' not in self.config_data:
-             self.config_data['package_managers'] = {
+        if 'package_managers' not in self.config:
+             self.config['package_managers'] = {
                 'preferred': None,
                 'installed': [],
                 'auto_install': False
             }
-        config = self.config_data['package_managers']
+        config = self.config['package_managers']
         if preferred is not None:
             config['preferred'] = preferred
         if installed is not None:
@@ -203,11 +187,11 @@ class ConfigManager:
     
     def set_rice_config(self, repository_name, key, value):
         """Sets a value for a specific key for the rice configuration."""
-        if 'rices' not in self.config_data:
-            self.config_data['rices'] = {}
-        if repository_name not in self.config_data['rices']:
-            self.config_data['rices'][repository_name] = {}
-        self.config_data['rices'][repository_name][key] = value
+        if 'rices' not in self.config:
+            self.config['rices'] = {}
+        if repository_name not in self.config['rices']:
+            self.config['rices'][repository_name] = {}
+        self.config['rices'][repository_name][key] = value
         self._save_config()
 
     def _validate_config(self, config_data: Dict[str, Any]) -> None:

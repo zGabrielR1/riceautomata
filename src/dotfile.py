@@ -636,14 +636,28 @@ class DotfileManager:
     def apply_dotfiles(self, repository_name, stow_options=[], package_manager=None, target_packages=None, overwrite_symlink=None, custom_paths=None, ignore_rules=False, template_context={}, discover_templates=False, custom_scripts=None):
         """Applies dotfiles from a repository using GNU Stow."""
         try:
-            rice_config = self.config_manager.get_rice_config(repository_name)
-            if not rice_config:
-                self.logger.error(f"No configuration found for repository: {repository_name}")
-                return False
+            # Initialize rice config if it doesn't exist
+            rice_config = {
+                'name': repository_name,
+                'local_directory': repository_name if os.path.isabs(repository_name) else os.path.abspath(repository_name),
+                'dotfile_directories': {},
+                'script_config': {},
+                'applied': False
+            }
+            self.config_manager.add_rice_config(repository_name, rice_config)
 
             local_dir = rice_config['local_directory']
+            
+            # Discover dotfile directories
+            dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
+            if not dotfile_dirs:
+                self.logger.error(f"No dotfile directories found in: {local_dir}")
+                return False
+                
+            rice_config['dotfile_directories'] = dotfile_dirs
+            self.config_manager.add_rice_config(repository_name, rice_config)
 
-            if not self.plates(local_dir, rice_config.get('dotfile_directories', {}), template_context):
+            if not self.plates(local_dir, dotfile_dirs, template_context):
                 return False
 
             nix_config = self._check_nix_config(local_dir)
