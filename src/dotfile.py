@@ -39,14 +39,6 @@ class ValidationError(Exception):
 class ConfigurationError(Exception):
     pass
 
-@contextmanager
-def _error_context(self, phase):
-    try:
-        yield
-    except Exception as e:
-        self.logger.error(f"An error occurred during {phase}: {str(e)}")
-        raise
-
 class DotfileNode:
     def __init__(self, path: str, is_dotfile: bool = False):
         self.path = path
@@ -246,6 +238,15 @@ class DotfileManager:
         self.max_retries = 3
         self.retry_delay = 2  # seconds
         self.dotfile_tree = DotfileTree()
+
+    @contextmanager
+    def _error_context(self, phase):
+        """Context manager for handling errors in specific phases."""
+        try:
+            yield
+        except Exception as e:
+            self.logger.error(f"An error occurred during {phase}: {str(e)}")
+            raise
 
     def _ensure_managed_dir(self):
         """Create managed rices directory if it does not exist."""
@@ -900,7 +901,7 @@ class DotfileManager:
           # Execute pre uninstall scripts
           env = os.environ.copy()
           env['RICE_DIRECTORY'] = local_dir
-          with _error_context(self, 'pre_uninstall'):
+          with self._error_context('pre_uninstall'):
               if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_uninstall', rice_config.get('script_config'), env):
                   return False
 
@@ -966,7 +967,7 @@ class DotfileManager:
                    self.logger.warning(f"Could not find extra directory: {target_path}. Skipping...")
 
           # Execute post uninstall scripts
-          with _error_context(self, 'post_uninstall'):
+          with self._error_context('post_uninstall'):
               if not self.script_runner.run_scripts_by_phase(local_dir, 'post_uninstall', rice_config.get('script_config'), env):
                   return False
 
