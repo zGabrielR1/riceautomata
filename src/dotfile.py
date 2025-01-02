@@ -221,10 +221,11 @@ class DotfileTree:
 class DotfileManager:
     """Manages dotfile operations including detection, backup, and installation."""
     
-    def __init__(self, config_dir: str = None):
+    def __init__(self, config_dir: str = None, verbose: bool = False):
         """Initialize DotfileManager with configuration directory."""
         self.config_dir = config_dir or os.path.expanduser("~/.config")
         self.os_type = platform.system()
+        self.verbose = verbose
         
         # Load configurations
         config_path = os.path.join(os.path.dirname(__file__), "..", "configs")
