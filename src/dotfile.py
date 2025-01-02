@@ -80,18 +80,30 @@ class DotfileTree:
             r'\.css$',  # Style files
             r'\.scss$',  # SASS files
             r'\.js$',  # JavaScript configs (like for ags)
-            r'\.ts$'  # TypeScript configs
+            r'\.ts$',  # TypeScript configs
+            r'zshrc$',  # Zsh config files
+            r'bashrc$',  # Bash config files
+            r'\.zsh$',  # Zsh plugin files
+            r'\.sh$'   # Shell scripts
         ]
         self.known_config_dirs = {
-            'nvim', 'alacritty', 'hypr', 'waybar', 'sway', 'i3', 'polybar', 'kitty',
-            'rofi', 'dunst', 'picom', 'gtk-3.0', 'gtk-4.0', 'zsh', 'bash', 'fish',
-            'tmux', 'neofetch', 'fastfetch', 'eww', 'wezterm', 'ags', 'anyrun',
-            'foot', 'fuzzel', 'mpv', 'qt5ct', 'wlogout', 'fontconfig', 'swaylock',
-            'hyprlock', 'hypridle', 'oh-my-zsh'
+            # Shell and terminal
+            'oh-my-zsh', 'zsh', 'bash', 'fish', 'tmux', 'kitty', 'alacritty', 'wezterm',
+            # Window managers and desktop
+            'i3', 'hypr', 'sway', 'awesome', 'polybar', 'waybar',
+            # System utilities
+            'nvim', 'neofetch', 'rofi', 'dunst', 'picom', 'flameshot',
+            # GTK and theming
+            'gtk-3.0', 'gtk-4.0', 'themes', 'icons',
+            # Additional tools
+            'fontconfig', 'swaylock', 'hyprlock', 'hypridle'
         }
         self.asset_dirs = {
             'wallpapers', 'backgrounds', 'icons', 'themes', 'fonts', 'assets',
-            'styles', 'shaders', 'images', 'readme_ressources'
+            'styles', 'shaders', 'images', 'readme_ressources', 'stickers'
+        }
+        self.shell_config_dirs = {
+            'plugins', 'themes', 'custom', 'lib', 'tools', 'templates'
         }
 
     def build_tree(self, root_path: str) -> DotfileNode:
@@ -103,6 +115,7 @@ class DotfileTree:
     def _is_dotfile(self, path: str) -> bool:
         """Enhanced check if a file or directory is a dotfile/config"""
         name = os.path.basename(path)
+        parent = os.path.basename(os.path.dirname(path))
         
         # Check if it's a known config directory
         if name in self.known_config_dirs:
@@ -112,8 +125,11 @@ class DotfileTree:
         if name.lower() in self.asset_dirs:
             return True
             
-        # Check if parent is .config
-        parent = os.path.basename(os.path.dirname(path))
+        # Check if it's part of shell configuration
+        if parent in self.known_config_dirs and name in self.shell_config_dirs:
+            return True
+            
+        # Check if parent is .config or config
         if parent == '.config' or parent == 'config':
             return True
             
@@ -385,29 +401,25 @@ class DotfileManager:
             self.logger.error(f"Directory does not exist: {dir_path}")
             return False
 
-        # Build and analyze the directory tree
-        tree = DotfileTree()
-        root = tree.build_tree(dir_path)
-        
-        # Check for known config directories
-        config_found = False
-        def check_configs(node):
-            nonlocal config_found
-            if node.is_dotfile or node.name in tree.known_config_dirs or node.name == '.config':
-                config_found = True
+        # Check for known config directories at root level
+        for item in os.listdir(dir_path):
+            if item in self.dotfile_tree.known_config_dirs or item.startswith('.'):
+                self.logger.info(f"Found config directory: {item}")
                 return True
-            for child in node.children:
-                if check_configs(child):
-                    return True
-            return False
-        
-        check_configs(root)
-        
-        if not config_found:
-            self.logger.warning(f"No configuration directories found in: {dir_path}")
-            return False
 
-        return True
+        # If no direct matches, check subdirectories
+        for item in os.listdir(dir_path):
+            item_path = os.path.join(dir_path, item)
+            if os.path.isdir(item_path):
+                for subitem in os.listdir(item_path):
+                    if (subitem in self.dotfile_tree.known_config_dirs or 
+                        subitem.startswith('.') or 
+                        any(re.search(pattern, subitem) for pattern in self.dotfile_tree.dotfile_patterns)):
+                        self.logger.info(f"Found config in subdirectory: {subitem}")
+                        return True
+
+        self.logger.warning(f"No configuration directories found in: {dir_path}")
+        return False
 
     def _discover_dotfile_directories(self, local_dir: str, target_packages=None, custom_paths=None, ignore_rules=False) -> Dict[str, str]:
         """Discover dotfile directories with enhanced detection."""
