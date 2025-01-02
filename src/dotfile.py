@@ -278,9 +278,9 @@ class DotfileManager:
                         repository_url,
                         local_dir
                     ])
-                    return result
+                    return True  # If command succeeds, return True
                 except subprocess.CalledProcessError as e:
-                    error_msg = e.stderr.lower()
+                    error_msg = e.stderr.decode('utf-8').lower() if e.stderr else ""
                     if "authentication failed" in error_msg:
                         raise GitOperationError("Authentication failed.")
                     elif "could not resolve host" in error_msg:
@@ -289,13 +289,12 @@ class DotfileManager:
                         raise GitOperationError("Permission denied.")
                     else:
                         raise
+                    return False
+
             clone_result = self._retry_operation(clone_op)
 
-            if clone_result:
+            if clone_result and os.path.exists(os.path.join(local_dir, ".git")):
                 self.logger.info(f"Repository cloned successfully to: {local_dir}")
-                if not os.path.exists(os.path.join(local_dir, ".git")):
-                    raise GitOperationError("Repository appears to be empty or not properly cloned")
-
                 timestamp = create_timestamp()
                 config = {
                     'repository_url': repository_url,
@@ -326,7 +325,10 @@ class DotfileManager:
                 self.config_manager.add_rice_config(repo_name, config)
                 return True
             else:
-                self.logger.error("Failed to clone repository.")
+                self.logger.error("Failed to clone repository or repository is empty.")
+                if os.path.exists(local_dir):
+                    import shutil
+                    shutil.rmtree(local_dir)
                 return False
         except GitOperationError as e:
             self.logger.error(f"Git operation failed: {str(e)}")
@@ -1243,11 +1245,11 @@ class DotfileManager:
             # 3. Detect and collect all dependencies
             self.logger.info("Detecting dependencies...")
             all_deps = {
-                'system': set(),
-                'packages': set(),
-                'fonts': set(),
-                'services': set(),
-                'optional': set()
+                'system': set(),  # System-level dependencies
+                'packages': set(),  # Package manager dependencies
+                'fonts': set(),  # Font dependencies
+                'services': set(),  # System services
+                'optional': set()  # Optional enhancements
             }
             
             for config_file in rice_analysis['config_files']:

@@ -175,10 +175,11 @@ Examples:
     try:
         if args.command == "clone":
             repository_url = sanitize_url(args.repository_url)
-            if dotfile_manager.clone_repository(repository_url):
-                logger.info(f"Successfully cloned repository: {repository_url}")
+            success = dotfile_manager.clone_repository(repository_url)
+            if success:
+                print(f"{Fore.GREEN}✓ Successfully cloned repository: {repository_url}{Style.RESET_ALL}")
             else:
-                logger.error(f"Failed to clone repository: {repository_url}")
+                print(f"{Fore.RED}✗ Failed to clone repository: {repository_url}{Style.RESET_ALL}")
                 sys.exit(1)
 
         elif args.command in ["apply", "-A"]:
