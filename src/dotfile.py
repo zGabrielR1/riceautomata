@@ -22,6 +22,7 @@ from .file_operations import FileOperations
 import traceback
 from contextlib import contextmanager
 import datetime
+import glob
 
 from .utils import setup_logger, sanitize_path, create_timestamp, confirm_action
 from .config import ConfigManager
@@ -660,9 +661,11 @@ class DotfileManager:
             if not self.plates(local_dir, dotfile_dirs, template_context):
                 return False
 
-            nix_config = self._check_nix_config(local_dir)
-            rice_config['nix_config'] = nix_config
-            self.config_manager.add_rice_config(repository_name, rice_config)
+            nix_files = glob.glob(os.path.join(local_dir, "**/*.nix"), recursive=True)
+            if nix_files:
+                for nix_file in nix_files:
+                    if not self._apply_nix_config(nix_file):
+                        self.logger.warning(f"Failed to apply Nix configuration from {nix_file}")
 
             script_config = self._discover_scripts(local_dir, custom_scripts)
             rice_config['script_config'].update(script_config)
@@ -674,10 +677,8 @@ class DotfileManager:
                 if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
                     return False
 
-            if nix_config:
-                if not self._apply_nix_config(local_dir, package_manager):
-                    return False
-                rice_config['applied'] = True
+            if nix_files:
+                rice_config['nix_config'] = True
                 self.config_manager.add_rice_config(repository_name, rice_config)
                 self.logger.info("Nix configuration applied successfully")
                 return True
