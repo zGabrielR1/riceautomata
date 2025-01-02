@@ -18,6 +18,10 @@ init()  # Initialize colorama for colored output
 
 def print_profiles(profiles: Dict[str, Any], active_profile: str) -> None:
     """Pretty print the profiles information."""
+    if not profiles:
+        print(f"{Fore.YELLOW}No profiles found{Style.RESET_ALL}")
+        return
+
     print(f"\n{Fore.CYAN}Available Profiles:{Style.RESET_ALL}")
     for profile in sorted(profiles.keys()):
         if profile == active_profile:
@@ -569,20 +573,25 @@ Examples:
                     rice_config = config_manager.get_rice_config(args.repository_name)
                     if rice_config and 'profiles' in rice_config:
                         active_profile = rice_config.get('active_profile', '')
-                        print_profiles(rice_config['profiles'], active_profile)
+                        profiles = rice_config.get('profiles', {})
+                        print_profiles(profiles, active_profile)
                     else:
-                        print(f"No profiles found for repository '{args.repository_name}'")
+                        print(f"{Fore.YELLOW}No profiles found for repository '{args.repository_name}'{Style.RESET_ALL}")
                 else:
                     # List all profiles from all repositories
                     config_data = config_manager._load_config()
-                    if 'rices' in config_data:
+                    if config_data and 'rices' in config_data and config_data['rices']:
+                        found_repos = False
                         for repo_name, repo_config in config_data['rices'].items():
-                            if 'profiles' in repo_config:
+                            if repo_config and 'profiles' in repo_config and repo_config['profiles']:
+                                found_repos = True
                                 print(f"\n{Fore.CYAN}Repository: {repo_name}{Style.RESET_ALL}")
                                 active_profile = repo_config.get('active_profile', '')
-                                print_profiles(repo_config['profiles'], active_profile)
+                                print_profiles(repo_config.get('profiles', {}), active_profile)
+                        if not found_repos:
+                            print(f"{Fore.YELLOW}No profiles found in any repository{Style.RESET_ALL}")
                     else:
-                        print("No profiles found")
+                        print(f"{Fore.YELLOW}No repositories or profiles found{Style.RESET_ALL}")
             except Exception as e:
                 logger.error(f"Error listing profiles: {str(e)}")
                 sys.exit(1)
