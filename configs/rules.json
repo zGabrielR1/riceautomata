@@ -1,4 +1,30 @@
 {
     "theme_dirs": ["themes", "colorschemes", "styles"],
-    "theme_indicators": [".colors-", "-theme.json", "_theme.toml"]
+    "theme_indicators": [".colors-", "-theme.json", "_theme.toml"],
+    "config_dirs": {
+        "window_managers": ["hypr", "i3", "sway", "awesome"],
+        "terminals": ["kitty", "alacritty", "wezterm"],
+        "desktop": ["waybar", "polybar", "rofi", "wofi", "dunst"],
+        "compositors": ["picom"],
+        "theming": ["gtk-3.0", "gtk-4.0", "qt5ct"],
+        "development": ["nvim", "tmux"],
+        "shell": ["zsh", "fish", "bash"],
+        "utils": ["flameshot", "neofetch"]
+    },
+    "backup": {
+        "enabled": true,
+        "suffix": ".bak",
+        "timestamp": true
+    },
+    "symlink_rules": {
+        "config_dir": ".config",
+        "home_dir": {
+            "zsh": [".zshrc", ".zshenv", ".zprofile"],
+            "bash": [".bashrc", ".bash_profile"],
+            "git": [".gitconfig"],
+            "tmux": [".tmux.conf"],
+            "vim": [".vimrc"],
+            "nvim": [".config/nvim"]
+        }
+    }
 }

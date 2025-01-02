@@ -1,1 +1,33 @@
-{}
+{
+    "backup_dir": "~/.config/riceautomata/backups",
+    "log_dir": "~/.config/riceautomata/logs",
+    "default_profile": "default",
+    "package_managers": {
+        "arch": {
+            "default": "pacman",
+            "aur_helper": "yay",
+            "install_cmd": {
+                "pacman": "sudo pacman -S --needed",
+                "aur": "yay -S --needed"
+            }
+        }
+    },
+    "symlink_mode": "relative",
+    "ignore_patterns": [
+        ".git",
+        ".gitignore",
+        "README.md",
+        "LICENSE",
+        "*.bak",
+        "*.old",
+        "*.tmp"
+    ],
+    "logging": {
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file_rotation": {
+            "max_bytes": 1048576,
+            "backup_count": 3
+        }
+    }
+}
