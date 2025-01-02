@@ -636,6 +636,15 @@ class DotfileManager:
                 'local_directory': repository_name if os.path.isabs(repository_name) else os.path.abspath(repository_name),
                 'dotfile_directories': {},
                 'script_config': {},
+                'profiles': {
+                    'default': {
+                        'name': 'default',
+                        'active': True,
+                        'created_at': datetime.datetime.now().isoformat(),
+                        'configs': []
+                    }
+                },
+                'active_profile': 'default',
                 'applied': False
             }
             self.config_manager.add_rice_config(repository_name, rice_config)
@@ -645,6 +654,7 @@ class DotfileManager:
             os.makedirs(config_home, exist_ok=True)
 
             # Discover and apply all configs
+            applied_configs = []
             for item in os.listdir(local_dir):
                 item_path = os.path.join(local_dir, item)
                 if os.path.isdir(item_path):
@@ -663,11 +673,20 @@ class DotfileManager:
                     os.symlink(item_path, target_path, target_is_directory=True)
                     self.logger.info(f"Applied {item} to ~/.config/")
                     rice_config['dotfile_directories'][item] = 'config'
+                    applied_configs.append({
+                        'name': item,
+                        'path': target_path,
+                        'type': 'config',
+                        'applied_at': datetime.datetime.now().isoformat()
+                    })
 
+            # Update profile with applied configs
+            rice_config['profiles']['default']['configs'] = applied_configs
+            
             # Update rice config
             rice_config['applied'] = True
             self.config_manager.add_rice_config(repository_name, rice_config)
-            self.logger.info(f"Successfully applied all configurations from {repository_name}")
+            self.logger.info(f"Successfully applied all configurations from {repository_name} to default profile")
             return True
 
     async def _install_package_async(self, package: str, package_manager, local_dir: str) -> bool:

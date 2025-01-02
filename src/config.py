@@ -5,6 +5,7 @@ import os
 from .utils import sanitize_path, setup_logger
 from typing import Dict, Any, Optional
 import jsonschema
+from datetime import datetime
 
 logger = setup_logger()
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/riceautomator")
@@ -121,11 +122,12 @@ class ConfigManager:
                 raise ConfigurationError(f"Profile {profile_name} already exists")
             
             rice_config['profiles'][profile_name] = {
-                'dotfile_directories': {},
-                'dependencies': [],
-                'script_config': {},
-                'custom_extras_paths': {}
+                'name': profile_name,
+                'active': False,
+                'created_at': datetime.now().isoformat(),
+                'configs': []
             }
+            
             self._save_config()
         except Exception as e:
             raise ConfigurationError(f"Failed to create profile: {e}")
@@ -140,7 +142,15 @@ class ConfigManager:
             if 'profiles' not in rice_config or profile_name not in rice_config['profiles']:
                 raise ConfigurationError(f"Profile {profile_name} not found")
             
+            # Deactivate current active profile
+            current_active = rice_config.get('active_profile')
+            if current_active and current_active in rice_config['profiles']:
+                rice_config['profiles'][current_active]['active'] = False
+            
+            # Activate new profile
+            rice_config['profiles'][profile_name]['active'] = True
             rice_config['active_profile'] = profile_name
+            
             self._save_config()
         except Exception as e:
             raise ConfigurationError(f"Failed to switch profile: {e}")
@@ -152,10 +162,14 @@ class ConfigManager:
             if not rice_config:
                 return None
             
-            active_profile = rice_config.get('active_profile', 'default')
+            active_profile = rice_config.get('active_profile')
+            if not active_profile:
+                return None
+                
             return rice_config.get('profiles', {}).get(active_profile)
         except Exception as e:
-            raise ConfigurationError(f"Failed to get active profile: {e}")
+            logger.error(f"Failed to get active profile: {e}")
+            return None
 
     def get_package_manager_config(self):
         """Gets the package manager configuration."""
