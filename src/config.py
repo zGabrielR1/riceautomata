@@ -1,8 +1,8 @@
 # src/config.py
-from exceptions import ConfigurationError, ValidationError
+from .exceptions import ConfigurationError, ValidationError
 import json
 import os
-from src.utils import sanitize_path, setup_logger
+from .utils import sanitize_path, setup_logger
 from typing import Dict, Any, Optional
 import jsonschema
 

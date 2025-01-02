@@ -1,9 +1,9 @@
 # src/cli.py
 import argparse
 import sys
-from src.utils import setup_logger, sanitize_url, exception_handler
-from src.package import PackageManager
-from src.dotfile import DotfileManager
+from .utils import setup_logger, sanitize_url, exception_handler
+from .package import PackageManager
+from .dotfile import DotfileManager
 import logging
 import os
 import json
