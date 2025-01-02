@@ -40,19 +40,11 @@ class ConfigurationError(Exception):
     pass
 
 @contextmanager
-def _error_context(phase):
-    """Context manager for handling errors in specific phases."""
+def _error_context(self, phase):
     try:
         yield
-    except ScriptExecutionError as e:
-        logger.error(f"Script execution failed during {phase}: {e}")
-        raise
-    except FileOperationError as e:
-        logger.error(f"File operation failed during {phase}: {e}")
-        raise
     except Exception as e:
-        logger.error(f"An unexpected error occurred during {phase}: {e}")
-        logger.debug(traceback.format_exc())
+        self.logger.error(f"An error occurred during {phase}: {str(e)}")
         raise
 
 class DotfileNode:
@@ -636,7 +628,7 @@ class DotfileManager:
 
     def apply_dotfiles(self, repository_name, stow_options=[], package_manager=None, target_packages=None, overwrite_symlink=None, custom_paths=None, ignore_rules=False, template_context={}, discover_templates=False, custom_scripts=None):
         """Applies dotfiles from a repository using GNU Stow."""
-        try:
+        with self._error_context("applying dotfiles"):
             # Initialize rice config if it doesn't exist
             rice_config = {
                 'name': repository_name,
@@ -661,6 +653,7 @@ class DotfileManager:
             if not self.plates(local_dir, dotfile_dirs, template_context):
                 return False
 
+            # Check for Nix configuration
             nix_files = glob.glob(os.path.join(local_dir, "**/*.nix"), recursive=True)
             if nix_files:
                 for nix_file in nix_files:
@@ -671,9 +664,8 @@ class DotfileManager:
             rice_config['script_config'].update(script_config)
             self.config_manager.add_rice_config(repository_name, rice_config)
 
-            env = os.environ.copy()
-            env['RICE_DIRECTORY'] = local_dir
-            with _error_context(self, 'pre_clone'):
+            env = {'RICE_DIR': local_dir}
+            if script_config:
                 if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
                     return False
 
@@ -683,111 +675,7 @@ class DotfileManager:
                 self.logger.info("Nix configuration applied successfully")
                 return True
 
-            if target_packages:
-                if not isinstance(target_packages, list):
-                    target_packages = [target_packages]
-
-                if len(target_packages) == 1 and os.path.basename(target_packages[0]) != ".config":
-                    self.logger.info(f"Applying dots for: {target_packages[0]}")
-                else:
-                    self.logger.info(f"Applying dots for: {', '.join(target_packages)}")
-
-            with _error_context(self, 'post_clone'):
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_clone', rice_config.get('script_config'), env):
-                    return False
-
-            dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
-            if not dotfile_dirs:
-                self.logger.warning("No dotfile directories found. Aborting")
-                return False
-
-            top_level_dirs = [os.path.basename(dir) for dir in dotfile_dirs if not os.path.dirname(dir)]
-            if len(top_level_dirs) > 1 and not target_packages:
-                chosen_rice = self._prompt_multiple_rices(top_level_dirs)
-                if not chosen_rice:
-                    self.logger.warning("Installation aborted.")
-                    return False
-                dotfile_dirs = {dir: category for dir, category in dotfile_dirs.items() if os.path.basename(dir).startswith(chosen_rice)}
-                if not dotfile_dirs:
-                    self.logger.error("No dotfiles were found with the specified rice name.")
-                    return False
-
-            rice_config['dotfile_directories'] = dotfile_dirs
-            dependencies = self._discover_dependencies(local_dir, dotfile_dirs)
-            rice_config['dependencies'] = dependencies
-            self.config_manager.add_rice_config(repository_name, rice_config)
-
-            if not self._check_nix_config(local_dir):
-                if not self._install_fonts(local_dir, package_manager):
-                    return False
-
-            with _error_context(self, 'pre_install_dependencies'):
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_install_dependencies', rice_config.get('script_config'), env):
-                    return False
-
-            if not package_manager.install(dependencies, local_dir=local_dir):
-                return False
-
-            with _error_context(self, 'post_install_dependencies'):
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_install_dependencies', rice_config.get('script_config'), env):
-                    return False
-
-            with _error_context(self, 'pre_apply'):
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_apply', rice_config.get('script_config'), env):
-                    return False
-
-            self._apply_templates(local_dir, template_context)
-
-            applied_all = True
-            for directory, category in dotfile_dirs.items():
-                dir_path = os.path.join(local_dir, directory)
-                if not os.path.exists(dir_path):
-                    self.logger.warning(f"Could not find directory {dir_path}")
-                    continue
-                if category == "config":
-                    if not self._apply_config_directory(local_dir, directory, stow_options, overwrite_symlink):
-                        applied_all = False
-                elif category == "cache":
-                    if not self._apply_cache_directory(local_dir, directory, stow_options, overwrite_symlink):
-                        applied_all = False
-                elif category == "local":
-                    if not self._apply_local_directory(local_dir, directory, stow_options, overwrite_symlink):
-                        applied_all = False
-                elif category == "script":
-                    if not self._apply_other_directory(local_dir, directory):
-                        applied_all = False
-                else:
-                    if not self._apply_other_directory(local_dir, directory):
-                        applied_all = False
-
-            custom_extras_paths = self.config_manager.get_rice_config(repository_name).get('custom_extras_paths')
-            if custom_extras_paths:
-                self._apply_custom_extras_directories(local_dir, custom_extras_paths)
-
-            extras_dir = os.path.join(local_dir, "Extras")
-            if os.path.exists(extras_dir) and os.path.isdir(extras_dir):
-                self.logger.info("Found Extras folder, applying the files now.")
-                for item in os.listdir(extras_dir):
-                    item_path = os.path.join(extras_dir, item)
-                    if os.path.isdir(item_path):
-                        if not self._apply_extra_directory(local_dir, item_path):
-                            applied_all = False
-
-            with _error_context(self, 'post_apply'):
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'post_apply', rice_config.get('script_config'), env):
-                    return False
-
-            if applied_all:
-                self.logger.info(f"Successfully applied dotfiles from {repository_name}")
-                rice_config['applied'] = True
-                self.config_manager.add_rice_config(repository_name, rice_config)
-                return True
-            else:
-                self.logger.error(f"Failed to apply all dotfiles")
-                return False
-        except Exception as e:
-            self.logger.error(f"An error occurred while applying dotfiles: {e}")
-            return False
+            return True
 
     async def _install_package_async(self, package: str, package_manager, local_dir: str) -> bool:
         """Install a single package asynchronously."""
