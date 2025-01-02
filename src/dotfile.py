@@ -630,7 +630,7 @@ class DotfileManager:
     def apply_dotfiles(self, repository_name, stow_options=[], package_manager=None, target_packages=None, overwrite_symlink=None, custom_paths=None, ignore_rules=False, template_context={}, discover_templates=False, custom_scripts=None):
         """Applies dotfiles from a repository using GNU Stow."""
         with self._error_context("applying dotfiles"):
-            # Initialize rice config if it doesn't exist
+            # Initialize rice config
             rice_config = {
                 'name': repository_name,
                 'local_directory': repository_name if os.path.isabs(repository_name) else os.path.abspath(repository_name),
@@ -641,41 +641,33 @@ class DotfileManager:
             self.config_manager.add_rice_config(repository_name, rice_config)
 
             local_dir = rice_config['local_directory']
-            
-            # Discover dotfile directories
-            dotfile_dirs = self._discover_dotfile_directories(local_dir, target_packages, custom_paths, ignore_rules)
-            if not dotfile_dirs:
-                self.logger.error(f"No dotfile directories found in: {local_dir}")
-                return False
-                
-            rice_config['dotfile_directories'] = dotfile_dirs
+            config_home = os.path.expanduser("~/.config")
+            os.makedirs(config_home, exist_ok=True)
+
+            # Discover and apply all configs
+            for item in os.listdir(local_dir):
+                item_path = os.path.join(local_dir, item)
+                if os.path.isdir(item_path):
+                    target_path = os.path.join(config_home, item)
+                    
+                    # Backup existing config if needed
+                    if os.path.exists(target_path) or os.path.islink(target_path):
+                        backup_path = f"{target_path}.bak.{int(time.time())}"
+                        if os.path.islink(target_path):
+                            os.unlink(target_path)
+                        else:
+                            shutil.move(target_path, backup_path)
+                            self.logger.info(f"Backed up existing config to {backup_path}")
+                    
+                    # Create symlink
+                    os.symlink(item_path, target_path, target_is_directory=True)
+                    self.logger.info(f"Applied {item} to ~/.config/")
+                    rice_config['dotfile_directories'][item] = 'config'
+
+            # Update rice config
+            rice_config['applied'] = True
             self.config_manager.add_rice_config(repository_name, rice_config)
-
-            if not self.plates(local_dir, dotfile_dirs, template_context):
-                return False
-
-            # Check for Nix configuration
-            nix_files = glob.glob(os.path.join(local_dir, "**/*.nix"), recursive=True)
-            if nix_files:
-                for nix_file in nix_files:
-                    if not self._apply_nix_config(nix_file):
-                        self.logger.warning(f"Failed to apply Nix configuration from {nix_file}")
-
-            script_config = self._discover_scripts(local_dir, custom_scripts)
-            rice_config['script_config'].update(script_config)
-            self.config_manager.add_rice_config(repository_name, rice_config)
-
-            env = {'RICE_DIR': local_dir}
-            if script_config:
-                if not self.script_runner.run_scripts_by_phase(local_dir, 'pre_clone', rice_config.get('script_config'), env):
-                    return False
-
-            if nix_files:
-                rice_config['nix_config'] = True
-                self.config_manager.add_rice_config(repository_name, rice_config)
-                self.logger.info("Nix configuration applied successfully")
-                return True
-
+            self.logger.info(f"Successfully applied all configurations from {repository_name}")
             return True
 
     async def _install_package_async(self, package: str, package_manager, local_dir: str) -> bool:
