@@ -87,60 +87,66 @@ class DotfileTree:
             'rofi', 'dunst', 'picom', 'gtk-3.0', 'gtk-4.0', 'zsh', 'bash', 'fish',
             'tmux', 'neofetch', 'fastfetch', 'eww', 'wezterm', 'ags', 'anyrun',
             'foot', 'fuzzel', 'mpv', 'qt5ct', 'wlogout', 'fontconfig', 'swaylock',
-            'hyprlock', 'hypridle'
+            'hyprlock', 'hypridle', 'oh-my-zsh'
         }
         self.asset_dirs = {
             'wallpapers', 'backgrounds', 'icons', 'themes', 'fonts', 'assets',
-            'styles', 'shaders', 'images'
+            'styles', 'shaders', 'images', 'readme_ressources'
         }
 
     def build_tree(self, root_path: str) -> DotfileNode:
-        """Build a tree structure of the dotfiles directory"""
-        root = DotfileNode(root_path)
-        self.root = root
-        self._build_tree_recursive(root)
-        return root
+        """Build a tree structure of the dotfiles directory with enhanced detection"""
+        self.root = DotfileNode(root_path)
+        self._build_tree_recursive(self.root)
+        return self.root
 
     def _is_dotfile(self, path: str) -> bool:
         """Enhanced check if a file or directory is a dotfile/config"""
         name = os.path.basename(path)
         
         # Check if it's a known config directory
-        if os.path.isdir(path):
-            if name.lower() in self.known_config_dirs:
-                return True
-            if name.lower() in self.asset_dirs:
-                return True
-            # Check for nested config structures (like .config/something)
-            if os.path.basename(os.path.dirname(path)) == '.config':
-                return True
-
-        # Check against patterns
+        if name in self.known_config_dirs:
+            return True
+            
+        # Check if it's an asset directory
+        if name.lower() in self.asset_dirs:
+            return True
+            
+        # Check if parent is .config
+        parent = os.path.basename(os.path.dirname(path))
+        if parent == '.config' or parent == 'config':
+            return True
+            
+        # Check against dotfile patterns
         for pattern in self.dotfile_patterns:
             if re.search(pattern, name):
                 return True
-
+                
         return False
 
     def _build_tree_recursive(self, node: DotfileNode):
-        """Recursively build the tree structure"""
+        """Recursively build the tree structure with improved detection"""
         try:
-            items = os.listdir(node.path)
-            for item in items:
-                full_path = os.path.join(node.path, item)
-                is_dotfile = self._is_dotfile(full_path)
-                child_node = DotfileNode(full_path, is_dotfile)
+            if not os.path.exists(node.path):
+                return
 
-                # Check for Nix configurations
-                if item.endswith('.nix') or item == 'flake.nix':
-                    child_node.is_nix_config = True
+            # Mark as dotfile if it matches patterns
+            if self._is_dotfile(node.path):
+                node.is_dotfile = True
 
-                if os.path.isdir(full_path):
-                    self._build_tree_recursive(child_node)
+            # Check for Nix configurations
+            if os.path.basename(node.path).endswith('.nix'):
+                node.is_nix_config = True
 
-                node.children.append(child_node)
-        except (PermissionError, OSError) as e:
-            logger.warning(f"Could not access {node.path}: {e}")
+            if os.path.isdir(node.path):
+                for item in os.listdir(node.path):
+                    item_path = os.path.join(node.path, item)
+                    child = DotfileNode(item_path)
+                    node.children.append(child)
+                    self._build_tree_recursive(child)
+
+        except Exception as e:
+            logger.error(f"Error building tree at {node.path}: {e}")
 
     def parse_json_dependencies(self, file):
         data = json.load(file)
@@ -373,9 +379,69 @@ class DotfileManager:
         except Exception as e:
             raise ConfigurationError(f"Failed to load dependency map: {e}")
 
-    def _validate_dotfile_directory(self, dir_path: str) -> None:
-        """Delegate to FileOperations."""
-        return self.file_ops.validate_directory(dir_path)
+    def _validate_dotfile_directory(self, dir_path: str) -> bool:
+        """Validate if a directory contains dotfiles or rice configurations."""
+        if not os.path.exists(dir_path):
+            self.logger.error(f"Directory does not exist: {dir_path}")
+            return False
+
+        # Build and analyze the directory tree
+        tree = DotfileTree()
+        root = tree.build_tree(dir_path)
+        
+        # Check for known config directories
+        config_found = False
+        def check_configs(node):
+            nonlocal config_found
+            if node.is_dotfile or node.name in tree.known_config_dirs or node.name == '.config':
+                config_found = True
+                return True
+            for child in node.children:
+                if check_configs(child):
+                    return True
+            return False
+        
+        check_configs(root)
+        
+        if not config_found:
+            self.logger.warning(f"No configuration directories found in: {dir_path}")
+            return False
+
+        return True
+
+    def _discover_dotfile_directories(self, local_dir: str, target_packages=None, custom_paths=None, ignore_rules=False) -> Dict[str, str]:
+        """Discover dotfile directories with enhanced detection."""
+        dotfile_dirs = {}
+        
+        if not os.path.exists(local_dir):
+            self.logger.error(f"Local directory does not exist: {local_dir}")
+            return dotfile_dirs
+
+        # First check if this is a direct dotfile directory
+        if self._validate_dotfile_directory(local_dir):
+            dotfile_dirs[local_dir] = "config"
+            return dotfile_dirs
+
+        # Then check for rice variants
+        variants = []
+        for item in os.listdir(local_dir):
+            item_path = os.path.join(local_dir, item)
+            if os.path.isdir(item_path):
+                if self._validate_dotfile_directory(item_path):
+                    variants.append(item)
+
+        if variants:
+            if len(variants) > 1 and not target_packages:
+                chosen_variant = self._prompt_multiple_rices(variants)
+                if not chosen_variant:
+                    return dotfile_dirs
+                variants = [chosen_variant]
+
+            for variant in variants:
+                variant_path = os.path.join(local_dir, variant)
+                dotfile_dirs[variant_path] = "config"
+
+        return dotfile_dirs
 
     def _safe_file_operation(self, operation_name: str, operation, *args, **kwargs):
         """Delegate to FileOperations."""
@@ -1173,9 +1239,12 @@ class DotfileManager:
             nonlocal is_nix_config
             if node.is_nix_config:
                 is_nix_config = True
+                return True
             for child in node.children:
-                traverse(child)
-
+                if traverse(child):
+                    return True
+            return False
+        
         traverse(root)
 
         return {
