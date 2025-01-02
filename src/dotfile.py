@@ -653,8 +653,15 @@ class DotfileManager:
             config_home = os.path.expanduser("~/.config")
             os.makedirs(config_home, exist_ok=True)
 
+            # Detect and install required packages
+            required_packages = self._detect_required_packages(local_dir)
+            if required_packages:
+                self.logger.info("Installing required packages for the rice configuration...")
+                if not self._install_packages(required_packages):
+                    self.logger.error("Failed to install required packages")
+                    return False
+
             # Discover and apply all configs
-            applied_configs = []
             for item in os.listdir(local_dir):
                 item_path = os.path.join(local_dir, item)
                 if os.path.isdir(item_path):
@@ -673,21 +680,48 @@ class DotfileManager:
                     os.symlink(item_path, target_path, target_is_directory=True)
                     self.logger.info(f"Applied {item} to ~/.config/")
                     rice_config['dotfile_directories'][item] = 'config'
-                    applied_configs.append({
-                        'name': item,
-                        'path': target_path,
-                        'type': 'config',
-                        'applied_at': datetime.datetime.now().isoformat()
-                    })
 
             # Update profile with applied configs
-            rice_config['profiles']['default']['configs'] = applied_configs
+            rice_config['profiles']['default']['configs'] = [{'name': item, 'path': target_path, 'type': 'config', 'applied_at': datetime.datetime.now().isoformat()} for item, target_path in zip(os.listdir(local_dir), [os.path.join(config_home, item) for item in os.listdir(local_dir)]) if os.path.isdir(os.path.join(local_dir, item))]
             
             # Update rice config
             rice_config['applied'] = True
             self.config_manager.add_rice_config(repository_name, rice_config)
             self.logger.info(f"Successfully applied all configurations from {repository_name} to default profile")
             return True
+
+    def _install_packages(self, packages: Dict[str, set]) -> bool:
+        """Install detected packages using appropriate package managers."""
+        try:
+            # Update package databases
+            self.logger.info("Updating package databases...")
+            subprocess.run(['sudo', 'pacman', '-Sy'], check=True)
+
+            # Install official packages
+            if packages['pacman']:
+                self.logger.info(f"Installing official packages: {', '.join(packages['pacman'])}")
+                pacman_cmd = ['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + list(packages['pacman'])
+                subprocess.run(pacman_cmd, check=True)
+
+            # Install AUR packages
+            if packages['aur']:
+                # Check if yay is installed
+                if not shutil.which('yay'):
+                    self.logger.info("Installing yay AUR helper...")
+                    clone_dir = "/tmp/yay-git"
+                    subprocess.run(['git', 'clone', 'https://aur.archlinux.org/yay-git.git', clone_dir], check=True)
+                    subprocess.run(['makepkg', '-si', '--noconfirm'], cwd=clone_dir, check=True)
+                    shutil.rmtree(clone_dir)
+
+                # Install AUR packages
+                self.logger.info(f"Installing AUR packages: {', '.join(packages['aur'])}")
+                yay_cmd = ['yay', '-S', '--needed', '--noconfirm'] + list(packages['aur'])
+                subprocess.run(yay_cmd, check=True)
+
+            return True
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Error installing packages: {e}")
+            return False
 
     async def _install_package_async(self, package: str, package_manager, local_dir: str) -> bool:
         """Install a single package asynchronously."""
@@ -1408,6 +1442,37 @@ class DotfileManager:
         
         return True
     
+    def _detect_required_packages(self, local_dir: str) -> Dict[str, set]:
+        """Detect required packages based on dotfile structure."""
+        required_packages = {
+            'pacman': {'base-devel', 'git', 'curl', 'wget'},  # Base packages
+            'aur': set()
+        }
+
+        # Core package mapping
+        package_mapping = {
+            'i3': {'pacman': {'i3-wm', 'i3-gaps', 'i3blocks', 'i3lock', 'i3status'}},
+            'polybar': {'pacman': {'polybar'}},
+            'rofi': {'pacman': {'rofi'}},
+            'picom': {'pacman': {'picom'}},
+            'kitty': {'pacman': {'kitty'}},
+            'flameshot': {'pacman': {'flameshot'}},
+            'neofetch': {'pacman': {'neofetch'}},
+            'nvim': {'pacman': {'neovim', 'python-pynvim', 'ripgrep', 'fd', 'nodejs', 'npm'}},
+            '.oh-my-zsh': {'pacman': {'zsh', 'zsh-completions', 'zsh-syntax-highlighting', 'zsh-autosuggestions'}},
+            'gtk-3.0': {'pacman': {'gtk3', 'gtk-engine-murrine', 'gtk-engines'}},
+            'gtk-4.0': {'pacman': {'gtk4'}}
+        }
+
+        # Scan directory structure
+        for item in os.listdir(local_dir):
+            if item in package_mapping:
+                for pkg_type, packages in package_mapping[item].items():
+                    required_packages[pkg_type].update(packages)
+                self.logger.info(f"Detected {item} configuration, adding required packages")
+
+        return required_packages
+
     def _detect_package_dependencies(self, config_file: str) -> Dict[str, list]:
         """Enhanced detection of package dependencies from various config file formats"""
         dependencies = {
