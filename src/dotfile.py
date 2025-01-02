@@ -435,3 +435,41 @@ class DotfileManager:
         except Exception as e:
             self.logger.error(f"Error applying dotfiles: {e}")
             return False
+
+    def clone_repository(self, repository_url: str) -> bool:
+        """
+        Clone a dotfiles repository to a temporary directory.
+        
+        Args:
+            repository_url (str): URL of the git repository to clone
+            
+        Returns:
+            bool: True if cloning was successful, False otherwise
+        """
+        try:
+            # Create a temporary directory for cloning
+            temp_dir = os.path.join(os.path.expanduser("~"), ".riceautomata", "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Clean the temp directory if it exists
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                os.makedirs(temp_dir)
+            
+            # Clone the repository
+            result = subprocess.run(
+                ["git", "clone", repository_url, temp_dir],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                logging.error(f"Failed to clone repository: {result.stderr}")
+                return False
+                
+            logging.info(f"Successfully cloned repository to {temp_dir}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error while cloning repository: {str(e)}")
+            return False
