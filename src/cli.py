@@ -165,6 +165,34 @@ Examples:
         help="List all available profiles")
     list_profiles_parser.add_argument("repository_name", nargs='?', help="Optional: Name of the repository to list profiles from")
 
+    # Create command
+    create_parser = subparsers.add_parser("create", help="Create a new profile")
+    create_parser.add_argument("profile_name", help="Name of the new profile")
+    create_parser.add_argument("--description", help="Optional description of the profile")
+
+    # Manage command
+    manage_parser = subparsers.add_parser("manage", help="Manage specific dotfiles")
+    manage_parser.add_argument("profile_name", help="Profile to manage")
+    manage_parser.add_argument("--target-files", help="Comma-separated list of files to manage", required=True)
+    manage_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying them")
+
+    # Backup command (both simple and advanced usage)
+    backup_parser = subparsers.add_parser("backup", help="Backup management commands")
+    backup_parser.add_argument("name", nargs="?", help="Optional: Name for the backup")
+    backup_subparsers = backup_parser.add_subparsers(dest="backup_command")
+    
+    create_backup = backup_subparsers.add_parser("create", help="Create a backup")
+    create_backup.add_argument("repository_name", help="Repository name")
+    create_backup.add_argument("backup_name", help="Backup name")
+    
+    restore_backup = backup_subparsers.add_parser("restore", help="Restore a backup")
+    restore_backup.add_argument("repository_name", help="Repository name")
+    restore_backup.add_argument("backup_name", help="Backup to restore")
+
+    # Restore command (both simple and advanced usage)
+    restore_parser = subparsers.add_parser("restore", help="Restore from a backup")
+    restore_parser.add_argument("backup_name", help="Name of the backup to restore")
+
     args = parser.parse_args()
     
     if not args.command:
@@ -407,126 +435,66 @@ Examples:
                 logger.info(f"Switched to profile '{args.profile_name}' for repository '{args.repository_name}'")
 
         elif args.command == "backup":
-            if args.backup_command == "create":
-                dotfile_manager.create_backup(args.repository_name, args.backup_name)
-                logger.info(f"Created backup '{args.backup_name}' for repository '{args.repository_name}'")
-            
-            elif args.backup_command == "restore":
-                dotfile_manager.restore_backup(args.repository_name, args.backup_name)
-                logger.info(f"Restored backup '{args.backup_name}' for repository '{args.repository_name}'")
-
-        elif args.command == "export":
-            logger.info(f"Exporting configuration for repository: {args.repository_name}")
-            
-            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
-            if not config:
-                logger.error(f"No configuration found for repository: {args.repository_name}")
-                sys.exit(1)
-            
-            # Create export data structure
-            export_data = {
-                "name": args.repository_name,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "config": config,
-                "profiles": {},
-                "dependencies": {},
-                "assets": {}
-            }
-            
-            # Export profiles
-            profiles = config.get("profiles", {})
-            for profile_name, profile_data in profiles.items():
-                export_data["profiles"][profile_name] = profile_data
-            
-            # Export dependencies if requested
-            if args.include_deps:
-                dotfile_dirs = dotfile_manager._discover_dotfile_directories(
-                    config.get("local_directory", "")
-                )
-                dependencies = dotfile_manager._discover_dependencies(
-                    config.get("local_directory", ""),
-                    dotfile_dirs
-                )
-                export_data["dependencies"] = dependencies
-            
-            # Export assets if requested
-            if args.include_assets:
-                assets = {}
-                asset_dirs = ["wallpapers", "icons", "fonts", "themes"]
-                for asset_dir in asset_dirs:
-                    dir_path = os.path.join(config.get("local_directory", ""), asset_dir)
-                    if os.path.exists(dir_path):
-                        assets[asset_dir] = []
-                        for root, _, files in os.walk(dir_path):
-                            for file in files:
-                                rel_path = os.path.relpath(
-                                    os.path.join(root, file),
-                                    dir_path
-                                )
-                                assets[asset_dir].append(rel_path)
-                export_data["assets"] = assets
-            
-            # Save export data
-            output_file = args.output or "rice-export.json"
             try:
-                with open(output_file, "w") as f:
-                    json.dump(export_data, f, indent=2)
-                logger.info(f"Successfully exported configuration to: {output_file}")
+                if args.backup_command:
+                    # Handle subcommands (create, restore)
+                    if args.backup_command == "create":
+                        backup_id = dotfile_manager.backup_manager.create_backup(args.repository_name, args.backup_name)
+                        if backup_id:
+                            print(f"{Fore.GREEN}✓ Created backup: {args.backup_name} (ID: {backup_id}){Style.RESET_ALL}")
+                    elif args.backup_command == "restore":
+                        if dotfile_manager.backup_manager.restore_backup(args.repository_name, args.backup_name):
+                            print(f"{Fore.GREEN}✓ Restored backup: {args.backup_name}{Style.RESET_ALL}")
+                else:
+                    # Simple backup command
+                    backup_name = args.name or f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    backup_id = dotfile_manager.backup_manager.create_backup("default", backup_name)
+                    if backup_id:
+                        print(f"{Fore.GREEN}✓ Created backup: {backup_name} (ID: {backup_id}){Style.RESET_ALL}")
             except Exception as e:
-                logger.error(f"Failed to export configuration: {e}")
+                logger.error(f"Error handling backup: {str(e)}")
                 sys.exit(1)
 
-        elif args.command == "import":
-            logger.info(f"Importing configuration from: {args.file}")
-            
+        elif args.command == "restore":
             try:
-                with open(args.file, "r") as f:
-                    import_data = json.load(f)
+                if dotfile_manager.backup_manager.restore_backup("default", args.backup_name):
+                    print(f"{Fore.GREEN}✓ Restored backup: {args.backup_name}{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}✗ Failed to restore backup: {args.backup_name}{Style.RESET_ALL}")
             except Exception as e:
-                logger.error(f"Failed to read import file: {e}")
+                logger.error(f"Error restoring backup: {str(e)}")
                 sys.exit(1)
-            
-            # Validate import data
-            required_keys = ["name", "config"]
-            if not all(key in import_data for key in required_keys):
-                logger.error("Invalid import file format")
+
+        elif args.command == "create":
+            try:
+                config_manager = ConfigManager()
+                if config_manager.create_profile("default", args.profile_name):
+                    print(f"{Fore.GREEN}✓ Created new profile: {args.profile_name}{Style.RESET_ALL}")
+                    if args.description:
+                        config_manager.set_rice_config("default", f"profiles.{args.profile_name}.description", args.description)
+                else:
+                    print(f"{Fore.RED}✗ Failed to create profile: {args.profile_name}{Style.RESET_ALL}")
+            except Exception as e:
+                logger.error(f"Error creating profile: {str(e)}")
                 sys.exit(1)
-            
-            # Use provided name or original name
-            repo_name = args.name or import_data["name"]
-            
-            # Create configuration
-            config = import_data["config"]
-            dotfile_manager.config_manager.add_rice_config(repo_name, config)
-            
-            # Import profiles
-            if "profiles" in import_data:
-                for profile_name, profile_data in import_data["profiles"].items():
-                    dotfile_manager.config_manager.create_profile(repo_name, profile_name)
-                    dotfile_manager.config_manager.update_profile(repo_name, profile_name, profile_data)
-            
-            # Install dependencies if included and not skipped
-            if "dependencies" in import_data and not args.skip_deps:
-                dependencies = import_data["dependencies"]
-                if dependencies:
-                    logger.info("Installing dependencies...")
-                    dotfile_manager._install_packages(dependencies)
-            
-            # Process assets if included and not skipped
-            if "assets" in import_data and not args.skip_assets:
-                assets = import_data["assets"]
-                if assets:
-                    logger.info("Processing assets...")
-                    for asset_type, asset_files in assets.items():
-                        target_dir = os.path.expanduser(f"~/.local/share/{asset_type}")
-                        os.makedirs(target_dir, exist_ok=True)
-                        for asset_file in asset_files:
-                            src = os.path.join(config.get("local_directory", ""), asset_type, asset_file)
-                            dst = os.path.join(target_dir, os.path.basename(asset_file))
-                            if os.path.exists(src):
-                                shutil.copy2(src, dst)
-            
-            logger.info(f"Successfully imported configuration as: {repo_name}")
+
+        elif args.command == "manage":
+            try:
+                target_files = [f.strip() for f in args.target_files.split(",")]
+                if args.dry_run:
+                    print(f"{Fore.CYAN}Preview of changes for profile {args.profile_name}:{Style.RESET_ALL}")
+                    for file in target_files:
+                        print(f"Would manage: {file}")
+                else:
+                    dotfile_manager.manage_dotfiles(
+                        "default",
+                        target_packages=target_files,
+                        ignore_rules=True
+                    )
+                    print(f"{Fore.GREEN}✓ Successfully managed files for profile: {args.profile_name}{Style.RESET_ALL}")
+            except Exception as e:
+                logger.error(f"Error managing files: {str(e)}")
+                sys.exit(1)
 
         elif args.command == "snapshot":
             backup_manager = BackupManager()
@@ -595,6 +563,119 @@ Examples:
             except Exception as e:
                 logger.error(f"Error listing profiles: {str(e)}")
                 sys.exit(1)
+
+        elif args.command == "export":
+            logger.info(f"Exporting configuration for repository: {args.repository_name}")
+            
+            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+            if not config:
+                logger.error(f"No configuration found for repository: {args.repository_name}")
+                sys.exit(1)
+            
+            # Create export data structure
+            export_data = {
+                "name": args.repository_name,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "config": config,
+                "profiles": {},
+                "dependencies": {},
+                "assets": {}
+            }
+            
+            # Export profiles
+            profiles = config.get("profiles", {})
+            for profile_name, profile_data in profiles.items():
+                export_data["profiles"][profile_name] = profile_data
+            
+            # Export dependencies if requested
+            if args.include_deps:
+                dotfile_dirs = dotfile_manager._discover_dotfile_directories(
+                    config.get("local_directory", "")
+                )
+                dependencies = dotfile_manager._discover_dependencies(
+                    config.get("local_directory", ""),
+                    dotfile_dirs
+                )
+                export_data["dependencies"] = dependencies
+            
+            # Export assets if requested
+            if args.include_assets:
+                assets = {}
+                asset_dirs = ["wallpapers", "icons", "fonts", "themes"]
+                for asset_dir in asset_dirs:
+                    dir_path = os.path.join(config.get("local_directory", ""), asset_dir)
+                    if os.path.exists(dir_path):
+                        assets[asset_dir] = []
+                        for root, _, files in os.walk(dir_path):
+                            for file in files:
+                                rel_path = os.path.relpath(
+                                    os.path.join(root, file),
+                                    dir_path
+                                )
+                                assets[asset_dir].append(rel_path)
+                export_data["assets"] = assets
+            
+            # Save export data
+            output_file = args.output or "rice-export.json"
+            try:
+                with open(output_file, "w") as f:
+                    json.dump(export_data, f, indent=2)
+                print(f"{Fore.GREEN}✓ Successfully exported configuration to: {output_file}{Style.RESET_ALL}")
+            except Exception as e:
+                logger.error(f"Failed to export configuration: {e}")
+                sys.exit(1)
+
+        elif args.command == "import":
+            logger.info(f"Importing configuration from: {args.file}")
+            
+            try:
+                with open(args.file, "r") as f:
+                    import_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to read import file: {e}")
+                sys.exit(1)
+            
+            # Validate import data
+            required_keys = ["name", "config"]
+            if not all(key in import_data for key in required_keys):
+                logger.error("Invalid import file format")
+                sys.exit(1)
+            
+            # Use provided name or original name
+            repo_name = args.name or import_data["name"]
+            
+            # Create configuration
+            config = import_data["config"]
+            dotfile_manager.config_manager.add_rice_config(repo_name, config)
+            
+            # Import profiles
+            if "profiles" in import_data:
+                for profile_name, profile_data in import_data["profiles"].items():
+                    dotfile_manager.config_manager.create_profile(repo_name, profile_name)
+                    dotfile_manager.config_manager.update_profile(repo_name, profile_name, profile_data)
+            
+            # Install dependencies if included and not skipped
+            if "dependencies" in import_data and not args.skip_deps:
+                dependencies = import_data["dependencies"]
+                if dependencies:
+                    logger.info("Installing dependencies...")
+                    dotfile_manager._install_packages(dependencies)
+            
+            # Process assets if included and not skipped
+            if "assets" in import_data and not args.skip_assets:
+                assets = import_data["assets"]
+                if assets:
+                    logger.info("Processing assets...")
+                    for asset_type, asset_files in assets.items():
+                        target_dir = os.path.expanduser(f"~/.local/share/{asset_type}")
+                        os.makedirs(target_dir, exist_ok=True)
+                        for asset_file in asset_files:
+                            src = os.path.join(config.get("local_directory", ""), asset_type, asset_file)
+                            dst = os.path.join(target_dir, os.path.basename(asset_file))
+                            if os.path.exists(src):
+                                shutil.copy2(src, dst)
+            
+            print(f"{Fore.GREEN}✓ Successfully imported configuration as: {repo_name}{Style.RESET_ALL}")
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")
