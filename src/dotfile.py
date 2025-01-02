@@ -239,6 +239,86 @@ class DotfileManager:
         self.retry_delay = 2  # seconds
         self.dotfile_tree = DotfileTree()
 
+    def _is_arch_based(self):
+        """Check if the system is Arch-based."""
+        try:
+            with open('/etc/os-release', 'r') as f:
+                content = f.read().lower()
+                return 'arch' in content
+        except:
+            return False
+
+    def _check_package_installed(self, package_name):
+        """Check if a package is installed."""
+        try:
+            result = subprocess.run(['pacman', '-Q', package_name], 
+                                 stdout=subprocess.PIPE, 
+                                 stderr=subprocess.PIPE)
+            return result.returncode == 0
+        except:
+            return False
+
+    def _run_command(self, cmd, sudo=False):
+        """Run a command with proper error handling."""
+        try:
+            if sudo and os.geteuid() != 0:
+                cmd = ['sudo'] + cmd
+            result = subprocess.run(cmd, 
+                                 check=True,
+                                 stdout=subprocess.PIPE, 
+                                 stderr=subprocess.PIPE,
+                                 text=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command failed: {' '.join(cmd)}")
+            self.logger.error(f"Error: {e.stderr}")
+            return False
+
+    def _install_packages(self, packages: Dict[str, set]) -> bool:
+        """Install detected packages using appropriate package managers."""
+        if not self._is_arch_based():
+            self.logger.error("This feature is currently only supported on Arch-based systems")
+            return False
+
+        try:
+            # Update package databases
+            self.logger.info("Updating package databases...")
+            if not self._run_command(['pacman', '-Sy'], sudo=True):
+                return False
+
+            # Install official packages
+            if packages['pacman']:
+                self.logger.info(f"Installing official packages: {', '.join(packages['pacman'])}")
+                if not self._run_command(['pacman', '-S', '--needed', '--noconfirm'] + list(packages['pacman']), sudo=True):
+                    return False
+
+            # Install AUR packages
+            if packages['aur']:
+                # Check if yay is installed
+                if not self._check_package_installed('yay'):
+                    self.logger.info("Installing yay AUR helper...")
+                    clone_dir = "/tmp/yay-git"
+                    if os.path.exists(clone_dir):
+                        shutil.rmtree(clone_dir)
+                    
+                    if not self._run_command(['git', 'clone', 'https://aur.archlinux.org/yay-git.git', clone_dir]):
+                        return False
+                    
+                    if not self._run_command(['makepkg', '-si', '--noconfirm'], cwd=clone_dir):
+                        return False
+                    
+                    shutil.rmtree(clone_dir)
+
+                # Install AUR packages
+                self.logger.info(f"Installing AUR packages: {', '.join(packages['aur'])}")
+                if not self._run_command(['yay', '-S', '--needed', '--noconfirm'] + list(packages['aur'])):
+                    return False
+
+            return True
+        except Exception as e:
+            self.logger.error(f"Error installing packages: {e}")
+            return False
+
     @contextmanager
     def _error_context(self, phase):
         """Context manager for handling errors in specific phases."""
@@ -636,15 +716,7 @@ class DotfileManager:
                 'local_directory': repository_name if os.path.isabs(repository_name) else os.path.abspath(repository_name),
                 'dotfile_directories': {},
                 'script_config': {},
-                'profiles': {
-                    'default': {
-                        'name': 'default',
-                        'active': True,
-                        'created_at': datetime.datetime.now().isoformat(),
-                        'configs': []
-                    }
-                },
-                'active_profile': 'default',
+                'profiles': {'default': {'active': True, 'configs': [], 'created_at': datetime.datetime.now().isoformat()}},
                 'applied': False
             }
             self.config_manager.add_rice_config(repository_name, rice_config)
@@ -655,7 +727,7 @@ class DotfileManager:
 
             # Detect and install required packages
             required_packages = self._detect_required_packages(local_dir)
-            if required_packages:
+            if required_packages and (required_packages['pacman'] or required_packages['aur']):
                 self.logger.info("Installing required packages for the rice configuration...")
                 if not self._install_packages(required_packages):
                     self.logger.error("Failed to install required packages")
@@ -680,14 +752,17 @@ class DotfileManager:
                     os.symlink(item_path, target_path, target_is_directory=True)
                     self.logger.info(f"Applied {item} to ~/.config/")
                     rice_config['dotfile_directories'][item] = 'config'
+                    rice_config['profiles']['default']['configs'].append({
+                        'name': item,
+                        'path': target_path,
+                        'type': 'config',
+                        'applied_at': datetime.datetime.now().isoformat()
+                    })
 
-            # Update profile with applied configs
-            rice_config['profiles']['default']['configs'] = [{'name': item, 'path': target_path, 'type': 'config', 'applied_at': datetime.datetime.now().isoformat()} for item, target_path in zip(os.listdir(local_dir), [os.path.join(config_home, item) for item in os.listdir(local_dir)]) if os.path.isdir(os.path.join(local_dir, item))]
-            
             # Update rice config
             rice_config['applied'] = True
             self.config_manager.add_rice_config(repository_name, rice_config)
-            self.logger.info(f"Successfully applied all configurations from {repository_name} to default profile")
+            self.logger.info(f"Successfully applied all configurations from {repository_name}")
             return True
 
     def _install_packages(self, packages: Dict[str, set]) -> bool:
