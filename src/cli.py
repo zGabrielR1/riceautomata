@@ -149,6 +149,16 @@ Examples:
     delete_parser = snapshot_subparsers.add_parser('delete', help='Delete a snapshot')
     delete_parser.add_argument('name', help='Name of the snapshot to delete')
 
+    # List command
+    list_parser = subparsers.add_parser("list", aliases=["ls"],
+        help="List all available profiles")
+    list_parser.add_argument("repository_name", nargs='?', help="Optional: Name of the repository to list profiles from")
+
+    # List-profiles command (alias for list)
+    list_profiles_parser = subparsers.add_parser("list-profiles", 
+        help="List all available profiles")
+    list_profiles_parser.add_argument("repository_name", nargs='?', help="Optional: Name of the repository to list profiles from")
+
     args = parser.parse_args()
     
     if not args.command:
@@ -548,6 +558,32 @@ Examples:
                         print(f"{Fore.GREEN}✓ Successfully deleted snapshot '{args.name}'!{Style.RESET_ALL}")
                     else:
                         print(f"{Fore.RED}✗ Failed to delete snapshot '{args.name}'{Style.RESET_ALL}")
+
+        elif args.command in ["list", "list-profiles", "ls"]:
+            try:
+                config_manager = ConfigManager()
+                if args.repository_name:
+                    # List profiles for specific repository
+                    rice_config = config_manager.get_rice_config(args.repository_name)
+                    if rice_config and 'profiles' in rice_config:
+                        active_profile = rice_config.get('active_profile', '')
+                        print_profiles(rice_config['profiles'], active_profile)
+                    else:
+                        print(f"No profiles found for repository '{args.repository_name}'")
+                else:
+                    # List all profiles from all repositories
+                    config_data = config_manager._load_config()
+                    if 'rices' in config_data:
+                        for repo_name, repo_config in config_data['rices'].items():
+                            if 'profiles' in repo_config:
+                                print(f"\n{Fore.CYAN}Repository: {repo_name}{Style.RESET_ALL}")
+                                active_profile = repo_config.get('active_profile', '')
+                                print_profiles(repo_config['profiles'], active_profile)
+                    else:
+                        print("No profiles found")
+            except Exception as e:
+                logger.error(f"Error listing profiles: {str(e)}")
+                sys.exit(1)
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")

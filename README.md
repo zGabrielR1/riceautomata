@@ -21,7 +21,10 @@ pip install -r requirements.txt
 riceautomata clone https://github.com/user/dotfiles
 
 # List available profiles
-riceautomata list-profiles my-dotfiles
+riceautomata list my-dotfiles
+
+# List all available profiles (* indicates active profile)
+riceautomata list
 
 # Apply a profile
 riceautomata apply my-dotfiles --profile minimal
@@ -32,12 +35,12 @@ riceautomata backup
 
 ## Features
 
-- 🔄 **Profile Management**: Create and switch between different system configurations
-- 💾 **Automatic Backups**: Safe configuration changes with automatic backups
-- 📦 **Package Management**: Handles package installations across different package managers
-- 🔍 **Smart Analysis**: Analyzes dotfiles for dependencies and conflicts
-- 🔒 **Safe Operations**: Rollback capability if something goes wrong
-- 🎨 **Template Support**: Use templates to customize configurations
+- **Profile Management**: Create and switch between different system configurations
+- **Automatic Backups**: Safe configuration changes with automatic backups
+- **Package Management**: Handles package installations across different package managers
+- **Smart Analysis**: Analyzes dotfiles for dependencies and conflicts
+- **Safe Operations**: Rollback capability if something goes wrong
+- **Template Support**: Use templates to customize configurations
 
 ## Common Commands
 
@@ -50,6 +53,12 @@ riceautomata apply my-profile
 
 # List all available profiles (* indicates active profile)
 riceautomata list
+
+# List profiles for a specific repository
+riceautomata list my-dotfiles
+
+# You can also use list-profiles (same functionality)
+riceautomata list-profiles [repository-name]
 
 # Create a backup of current configuration
 riceautomata backup
