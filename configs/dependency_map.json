@@ -1,119 +1,33 @@
 {
-    "window_managers": {
-        "hyprland": {
-            "pacman": ["hyprland", "xdg-desktop-portal-hyprland", "waybar"],
-            "aur": ["hyprland-git"]
-        },
-        "i3": {
-            "pacman": ["i3-wm", "i3blocks", "i3lock", "i3status", "xorg-server", "xorg-xinit"],
-            "aur": ["i3-gaps-rounded-git"]
-        },
-        "sway": {
-            "pacman": ["sway", "swaylock", "swayidle", "swaybg"],
-            "aur": ["waybar-hyprland-git"]
-        },
-        "awesome": {
-            "pacman": ["awesome", "xorg-server", "xorg-xinit"],
-            "aur": []
-        }
-    },
-    "terminals": {
-        "kitty": {
-            "pacman": ["kitty", "ttf-firacode-nerd"],
-            "aur": ["ttf-nerd-fonts-symbols-common"]
-        },
-        "alacritty": {
-            "pacman": ["alacritty", "ttf-firacode-nerd"],
-            "aur": ["ttf-nerd-fonts-symbols-common"]
-        },
-        "wezterm": {
-            "pacman": ["wezterm", "ttf-firacode-nerd"],
-            "aur": ["ttf-nerd-fonts-symbols-common"]
-        }
-    },
-    "desktop": {
-        "waybar": {
-            "pacman": ["waybar", "otf-font-awesome", "pavucontrol"],
-            "aur": ["waybar-hyprland-git"]
-        },
-        "polybar": {
-            "pacman": ["polybar", "otf-font-awesome"],
-            "aur": ["polybar-scripts-git"]
-        },
-        "rofi": {
-            "pacman": ["rofi"],
-            "aur": ["rofi-lbonn-wayland-git"]
-        },
-        "wofi": {
-            "pacman": ["wofi"],
-            "aur": []
-        },
-        "dunst": {
-            "pacman": ["dunst", "libnotify"],
-            "aur": []
-        }
-    },
-    "compositors": {
-        "picom": {
-            "pacman": ["picom"],
-            "aur": ["picom-git"]
-        }
-    },
-    "theming": {
-        "gtk-3.0": {
-            "pacman": ["gtk3", "gnome-themes-extra", "adwaita-icon-theme"],
-            "aur": ["nordic-theme-git"]
-        },
-        "gtk-4.0": {
-            "pacman": ["gtk4", "gnome-themes-extra", "adwaita-icon-theme"],
-            "aur": ["nordic-theme-git"]
-        },
-        "qt5ct": {
-            "pacman": ["qt5ct", "kvantum"],
-            "aur": []
-        }
-    },
-    "development": {
-        "neovim": {
-            "pacman": ["neovim", "python-pynvim", "ripgrep", "fd"],
-            "aur": ["nvim-packer-git"]
-        },
-        "tmux": {
-            "pacman": ["tmux"],
-            "aur": ["tmux-plugin-manager-git"]
-        }
-    },
-    "shell": {
-        "zsh": {
-            "pacman": ["zsh", "zsh-completions", "zsh-syntax-highlighting", "zsh-autosuggestions"],
-            "aur": ["zsh-fast-syntax-highlighting-git"]
-        },
-        "fish": {
-            "pacman": ["fish", "starship"],
-            "aur": []
-        }
-    },
-    "utils": {
-        "flameshot": {
-            "pacman": ["flameshot"],
-            "aur": []
-        },
-        "neofetch": {
-            "pacman": ["neofetch"],
-            "aur": []
-        }
-    },
-    "base": {
-        "pacman": [
-            "base-devel",
-            "git",
-            "curl",
-            "wget",
-            "python",
-            "python-pip",
-            "xdg-utils",
-            "xdg-user-dirs"
-        ],
-        "aur": []
-    }
+    "neovim": "neovim",
+    "vim": "vim",
+    "nvim": "neovim",
+    "fzf": "fzf",
+    "ripgrep": "ripgrep",
+    "ag": "the_silver_searcher",
+    "fd": "fd-find",
+    "git": "git",
+    "node": "nodejs",
+    "nodejs": "nodejs",
+    "npm": "npm",
+    "cargo": "rust",
+    "paru": "paru",
+    "yay": "yay",
+    "i3": "i3-wm",
+    "i3wm": "i3-wm",
+    "i3-gaps": "i3-gaps",
+    "polybar": "polybar",
+    "rofi": "rofi",
+    "dunst": "dunst",
+    "picom": "picom",
+    "alacritty": "alacritty",
+    "kitty": "kitty",
+    "zsh": "zsh",
+    "bash": "bash",
+    "fish": "fish",
+    "tmux": "tmux",
+    "wezterm": "wezterm",
+    "btop": "btop",
+    "htop": "htop",
+    "neofetch": "neofetch"
 }

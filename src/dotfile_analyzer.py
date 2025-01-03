@@ -1,384 +1,246 @@
-import os
-import re
-import json
-from typing import Dict, List, Tuple
-from src.utils import setup_logger
+# dotfilemanager/dotfile_analyzer.py
 
-logger = setup_logger()
+import json
+import re
+from pathlib import Path
+from typing import Dict, Set, Any
+import logging
+import toml
+import yaml
+
+from .exceptions import ValidationError
+
+class DotfileNode:
+    def __init__(self, path: Path, is_dotfile: bool = False):
+        self.path = path
+        self.name = path.name
+        self.is_dotfile = is_dotfile
+        self.children = []
+        self.dependencies: Set[str] = set()
+        self.is_nix_config = False
 
 class DotfileAnalyzer:
-    """Handles the analysis and scoring of potential dotfile directories."""
-    
-    def __init__(self, rules_config=None, verbose=False):
-        self.rules_config = rules_config or {}
-        self.verbose = verbose
-        self.logger = logger
-        self.dependency_db = {}  # Initialize dependency database
-        self._init_scoring_rules()
-        
-    def _init_scoring_rules(self):
-        """Initialize scoring rules with default values."""
-        self.name_patterns = {
-            r'^\.(config|conf)$': 10,
-            r'^\.(vim|emacs|bash|zsh)$': 8,
-            r'^\..*rc$': 7,
-            r'^\.[A-Za-z0-9-_]+$': 5
-        }
-        
-        self.content_patterns = {
-            r'(vim|emacs|bash|zsh)rc': 8,
-            r'config\.(yaml|json|toml)': 7,
-            r'\.gitconfig': 6,
-            r'environment': 5
-        }
-        
-        # Update with custom rules if provided
-        if self.rules_config:
-            self.name_patterns.update(self.rules_config.get('name_patterns', {}))
-            self.content_patterns.update(self.rules_config.get('content_patterns', {}))
-            
-    def analyze_directory(self, directory: str) -> Dict[str, Dict]:
+    """
+    Analyzes dotfile directories to determine structure and dependencies.
+    """
+    def __init__(self, dependency_map: Dict[str, str], logger: Optional[logging.Logger] = None):
         """
-        Analyze a directory and its contents to identify potential dotfile directories.
-        
-        Args:
-            directory: Path to the directory to analyze
-            
-        Returns:
-            Dict containing analysis results for each subdirectory
-        """
-        results = {}
-        try:
-            for root, dirs, files in os.walk(directory):
-                for dir_name in dirs:
-                    dir_path = os.path.join(root, dir_name)
-                    score = self._score_directory(dir_path)
-                    metadata = self._collect_metadata(dir_path)
-                    
-                    if score > 0:
-                        results[dir_path] = {
-                            'score': score,
-                            'metadata': metadata,
-                            'confidence': self._calculate_confidence(score, metadata),
-                            'dependencies': self._extract_dependencies(dir_path),
-                            'themes': self._detect_themes(dir_path)
-                        }
-                        
-                        if self.verbose:
-                            self.logger.debug(f"Directory {dir_path} scored {score} points")
-                            
-        except Exception as e:
-            self.logger.error(f"Error analyzing directory {directory}: {e}")
-            
-        return results
-        
-    def _score_directory(self, directory: str) -> float:
-        """
-        Calculate a score for a directory based on its name and contents.
-        
-        Args:
-            directory: Path to the directory to score
-            
-        Returns:
-            Float score indicating likelihood of being a dotfile directory
-        """
-        score = 0.0
-        
-        # Score based on directory name
-        dir_name = os.path.basename(directory)
-        score += self._score_dir_name(dir_name)
-        
-        # Score based on contents
-        score += self._score_dotfile_content(directory)
-        
-        return score
-        
-    def _score_dir_name(self, dir_name: str) -> float:
-        """Score a directory name based on patterns."""
-        score = 0.0
-        for pattern, points in self.name_patterns.items():
-            if re.search(pattern, dir_name, re.IGNORECASE):
-                score += points
-                if self.verbose:
-                    self.logger.debug(f"Directory name {dir_name} matched pattern {pattern} (+{points} points)")
-        return score
-        
-    def _score_dotfile_content(self, directory: str) -> float:
-        """Score directory contents based on patterns."""
-        score = 0.0
-        try:
-            for root, _, files in os.walk(directory):
-                for file_name in files:
-                    file_path = os.path.join(root, file_name)
-                    
-                    # Score based on file name patterns
-                    for pattern, points in self.content_patterns.items():
-                        if re.search(pattern, file_name, re.IGNORECASE):
-                            score += points
-                            if self.verbose:
-                                self.logger.debug(f"File {file_name} matched pattern {pattern} (+{points} points)")
-                            
-                    # Score based on file content (first few lines)
-                    score += self._analyze_file_content(file_path)
-                    
-        except Exception as e:
-            self.logger.error(f"Error scoring directory contents {directory}: {e}")
-            
-        return score
-        
-    def _analyze_file_content(self, file_path: str, max_lines: int = 10) -> float:
-        """Analyze the content of a file for dotfile indicators."""
-        score = 0.0
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for i, line in enumerate(f):
-                    if i >= max_lines:
-                        break
-                    
-                    # Look for common dotfile indicators in content
-                    if re.search(r'(export|alias|source|set\s+[-\w]+)', line):
-                        score += 2
-                    elif re.search(r'(config|settings|preferences)', line, re.IGNORECASE):
-                        score += 1
-                        
-        except Exception as e:
-            if self.verbose:
-                self.logger.debug(f"Could not analyze file {file_path}: {e}")
-                
-        return score
-        
-    def _collect_metadata(self, directory: str) -> Dict:
-        """Collect metadata about the directory."""
-        try:
-            return {
-                'file_count': sum(len(files) for _, _, files in os.walk(directory)),
-                'total_size': sum(
-                    os.path.getsize(os.path.join(root, file))
-                    for root, _, files in os.walk(directory)
-                    for file in files
-                ),
-                'last_modified': max(
-                    os.path.getmtime(os.path.join(root, file))
-                    for root, _, files in os.walk(directory)
-                    for file in files
-                ) if any(os.walk(directory))[2] else 0,
-                'depth': len(os.path.relpath(directory).split(os.sep))
-            }
-        except Exception as e:
-            self.logger.error(f"Error collecting metadata for {directory}: {e}")
-            return {}
-            
-    def _calculate_confidence(self, score: float, metadata: Dict) -> float:
-        """Calculate confidence score based on directory score and metadata."""
-        confidence = min(score / 100.0, 1.0)  # Base confidence on score
-        
-        # Adjust confidence based on metadata
-        if metadata.get('file_count', 0) > 10:
-            confidence *= 1.2
-        if metadata.get('depth', 0) > 3:
-            confidence *= 0.8
-            
-        return min(confidence, 1.0)  # Ensure confidence is between 0 and 1
+        Initializes the DotfileAnalyzer.
 
-    def _extract_dependencies(self, dir_path: str) -> List[str]:
-        """Extract potential dependencies from files in a directory using more robust methods."""
+        Args:
+            dependency_map (Dict[str, str]): Mapping of configurations to packages.
+            logger (Optional[logging.Logger]): Logger instance.
+        """
+        self.dependency_map = dependency_map
+        self.logger = logger or logging.getLogger('DotfileManager')
+        # Precompile regex patterns
+        self.package_regex = re.compile(r'[\w-]+(?:>=?[\d.]+)?')
+
+    def build_tree(self, root_path: Path) -> DotfileNode:
+        """
+        Builds a tree structure of the dotfiles directory.
+
+        Args:
+            root_path (Path): Root path of the dotfiles.
+
+        Returns:
+            DotfileNode: Root node of the tree.
+        """
+        root = DotfileNode(root_path)
+        stack = [root]
+
+        while stack:
+            current_node = stack.pop()
+            if not current_node.path.exists():
+                continue
+
+            if self._is_dotfile(current_node.path):
+                current_node.is_dotfile = True
+
+            if current_node.path.suffix == '.nix':
+                current_node.is_nix_config = True
+
+            if current_node.path.is_dir():
+                for item in current_node.path.iterdir():
+                    child_node = DotfileNode(item)
+                    current_node.children.append(child_node)
+                    stack.append(child_node)
+
+        return root
+
+    def _is_dotfile(self, path: Path) -> bool:
+        """
+        Determines if a given path is a dotfile or config.
+
+        Args:
+            path (Path): Path to check.
+
+        Returns:
+            bool: True if dotfile/config, False otherwise.
+        """
+        # Implement enhanced dotfile detection logic
+        name = path.name.lower()
+        known_config_dirs = {
+            'oh-my-zsh', 'zsh', 'bash', 'fish', 'tmux', 'kitty', 'alacritty', 'wezterm',
+            'i3', 'hypr', 'sway', 'awesome', 'polybar', 'waybar',
+            'nvim', 'neofetch', 'rofi', 'dunst', 'picom', 'flameshot',
+            'gtk-3.0', 'gtk-4.0', 'themes', 'icons',
+            'fontconfig', 'swaylock', 'hyprlock', 'hypridle'
+        }
+        asset_dirs = {
+            'wallpapers', 'backgrounds', 'icons', 'themes', 'fonts', 'assets',
+            'styles', 'shaders', 'images', 'readme_resources', 'stickers'
+        }
+        shell_config_dirs = {
+            'plugins', 'themes', 'custom', 'lib', 'tools', 'templates'
+        }
+        dotfile_patterns = [
+            r'^\.',  # Traditional dot files
+            r'^dot_',  # Chezmoi style
+            r'\.conf$',  # Configuration files
+            r'\.toml$', r'\.yaml$', r'\.yml$', r'\.json$',
+            r'rc$',  # rc files
+            r'config$',  # config files
+            r'\.nix$',  # Nix configuration files
+            r'flake\.nix$',  # Nix flakes
+            r'\.ini$',  # INI configs
+            r'\.ron$',  # RON configs
+            r'\.css$',  # Style files
+            r'\.scss$',  # SASS files
+            r'\.js$',  # JavaScript configs (like for ags)
+            r'\.ts$',  # TypeScript configs
+            r'zshrc$',  # Zsh config files
+            r'bashrc$',  # Bash config files
+            r'\.zsh$',  # Zsh plugin files
+            r'\.sh$'   # Shell scripts
+        ]
+        # Check known config directories
+        if name in known_config_dirs:
+            return True
+        # Check asset directories
+        if name in asset_dirs:
+            return True
+        # Check shell config directories
+        parent = path.parent.name.lower()
+        if parent in known_config_dirs and name in shell_config_dirs:
+            return True
+        # Check if parent is .config or config
+        if parent in ['.config', 'config']:
+            return True
+        # Check against dotfile patterns
+        for pattern in dotfile_patterns:
+            if re.search(pattern, name):
+                return True
+        return False
+
+    def find_dependencies(self, node: DotfileNode) -> None:
+        """
+        Recursively finds dependencies in the tree.
+
+        Args:
+            node (DotfileNode): Node to analyze.
+        """
+        if node.path.is_file():
+            dependencies = self._parse_dependencies(node.path)
+            node.dependencies.update(dependencies)
+
+        for child in node.children:
+            self.find_dependencies(child)
+
+    def _parse_dependencies(self, file_path: Path) -> Set[str]:
+        """
+        Parses a file to find dependencies based on its format.
+
+        Args:
+            file_path (Path): Path to the file.
+
+        Returns:
+            Set[str]: Set of dependencies found.
+        """
         dependencies = set()
-        patterns = {
-            "import_require": r"(?:require|import)\s*\(?\s*['\"]([\w-]+)['\"]\s*\)?",
-            "depends_on": r"depends_on\s+['\"]([\w-]+)['\"]",
-            "install_use_package": r"(?:install|use)_package\s*\(\s*['\"]([\w-]+)['\"]\s*\)",
-            "executables": r"\b(fzf|rg|ag|npm|pip|cargo)\b",
-        }
-
-        for root, _, files in os.walk(dir_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        for pattern_name, pattern in patterns.items():
-                            matches = re.findall(pattern, content, re.IGNORECASE)
-                            for match in matches:
-                                if match in self.dependency_db:
-                                    dependencies.add(self.dependency_db[match])
-                                else:
-                                    dependencies.add(match)
-                except UnicodeDecodeError:
-                    if self.verbose:
-                        self.logger.debug(f"Skipping binary file: {file_path}")
-                except Exception as e:
-                    self.logger.error(f"Error analyzing file {file_path}: {e}")
-
-        return list(dependencies)
-
-    def _detect_themes(self, dir_path: str) -> List[str]:
-        """
-        Detect potential themes based on directory structure and file names.
-        """
-        themes = []
-        if os.path.basename(dir_path).lower() in ("themes", "colors", "styles"):
-            for item in os.listdir(dir_path):
-                if os.path.isdir(os.path.join(dir_path, item)):
-                    themes.append(item)
-        return themes
-
-    def analyze_dependencies(self, config_file: str) -> Dict[str, List[str]]:
-        """Enhanced detection of package dependencies from various config file formats"""
-        dependencies = {
-            'system': set(),  # System-level dependencies
-            'packages': set(),  # Package manager dependencies
-            'fonts': set(),  # Font dependencies
-            'services': set(),  # System services
-            'optional': set()  # Optional enhancements
-        }
-        
-        if not os.path.exists(config_file):
-            return {k: list(v) for k, v in dependencies.items()}
-            
         try:
-            with open(config_file, 'r') as f:
-                content = f.read()
-                
-            file_ext = os.path.splitext(config_file)[1].lower()
-            
-            # Parse based on file type
-            if file_ext in ['.json', '.jsonc']:
-                self._parse_json_dependencies(content, dependencies)
-            elif file_ext in ['.yaml', '.yml']:
-                self._parse_yaml_dependencies(content, dependencies)
-            elif file_ext == '.toml':
-                self._parse_toml_dependencies(content, dependencies)
-            elif file_ext in ['.conf', '.ini']:
-                self._parse_ini_dependencies(content, dependencies)
-            elif 'pkgbuild' in os.path.basename(config_file).lower():
-                self._parse_pkgbuild_dependencies(content, dependencies)
-            elif file_ext == '.nix':
-                self._parse_nix_dependencies(content, dependencies)
-            
-            # Analyze shell scripts for common package usage patterns
-            if file_ext in ['.sh', '.bash', '.zsh']:
-                self._analyze_shell_dependencies(content, dependencies)
-            
-            # Check for common desktop environment dependencies
-            self._detect_de_dependencies(content, dependencies)
-            
-            # Check for font dependencies
-            self._detect_font_dependencies(content, dependencies)
-            
-            # Check for service dependencies
-            self._detect_service_dependencies(content, dependencies)
-            
+            if file_path.suffix == '.json':
+                dependencies = self.parse_json_dependencies(file_path)
+            elif file_path.suffix == '.toml':
+                dependencies = self.parse_toml_dependencies(file_path)
+            elif file_path.suffix in ['.yaml', '.yml']:
+                dependencies = self.parse_yaml_dependencies(file_path)
+            else:
+                content = file_path.read_text(encoding='utf-8').lower()
+                if any(indicator in content for indicator in ['requires', 'depends', 'dependencies']):
+                    packages = set(self.package_regex.findall(content))
+                    dependencies.update(packages)
         except Exception as e:
-            self.logger.warning(f"Error parsing dependencies in {config_file}: {e}")
-            
-        return {k: list(v) for k, v in dependencies.items()}
-        
-    def _parse_json_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Parse JSON-format dependency declarations"""
+            self.logger.warning(f"Could not analyze dependencies in {file_path}: {e}")
+        return dependencies
+
+    def parse_json_dependencies(self, file_path: Path) -> Set[str]:
+        """
+        Parses JSON files for dependencies.
+
+        Args:
+            file_path (Path): Path to the JSON file.
+
+        Returns:
+            Set[str]: Set of dependencies found.
+        """
+        dependencies = set()
         try:
-            data = json.loads(content)
-            # Check package.json style dependencies
+            data = json.loads(file_path.read_text(encoding='utf-8'))
             if isinstance(data, dict):
-                for key in ['dependencies', 'devDependencies', 'peerDependencies']:
+                for key in ['dependencies', 'devDependencies']:
                     if key in data and isinstance(data[key], dict):
-                        dependencies['packages'].update(data[key].keys())
-                        
-                # Check for system requirements
-                if 'system' in data:
-                    dependencies['system'].update(data.get('system', []))
-                    
-                # Check for optional enhancements
-                if 'optional' in data:
-                    dependencies['optional'].update(data.get('optional', []))
-        except:
-            pass
-            
-    def _parse_yaml_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Parse YAML-format dependency declarations"""
+                        dependencies.update(data[key].keys())
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"JSON decode error in {file_path}: {e}")
+        except Exception as e:
+            self.logger.warning(f"Error parsing JSON dependencies in {file_path}: {e}")
+        return dependencies
+
+    def parse_toml_dependencies(self, file_path: Path) -> Set[str]:
+        """
+        Parses TOML files for dependencies.
+
+        Args:
+            file_path (Path): Path to the TOML file.
+
+        Returns:
+            Set[str]: Set of dependencies found.
+        """
+        dependencies = set()
         try:
-            import yaml
-            data = yaml.safe_load(content)
+            data = toml.loads(file_path.read_text(encoding='utf-8'))
+            for section in ['dependencies', 'build-dependencies', 'dev-dependencies']:
+                if section in data and isinstance(data[section], dict):
+                    dependencies.update(data[section].keys())
+        except toml.TomlDecodeError as e:
+            self.logger.warning(f"TOML decode error in {file_path}: {e}")
+        except Exception as e:
+            self.logger.warning(f"Error parsing TOML dependencies in {file_path}: {e}")
+        return dependencies
+
+    def parse_yaml_dependencies(self, file_path: Path) -> Set[str]:
+        """
+        Parses YAML files for dependencies.
+
+        Args:
+            file_path (Path): Path to the YAML file.
+
+        Returns:
+            Set[str]: Set of dependencies found.
+        """
+        dependencies = set()
+        try:
+            data = yaml.safe_load(file_path.read_text(encoding='utf-8'))
             if isinstance(data, dict):
-                # Common YAML dependency keys
-                dep_keys = ['dependencies', 'requires', 'packages', 'system']
-                for key in dep_keys:
+                for key in ['dependencies', 'requires']:
                     if key in data:
                         if isinstance(data[key], list):
-                            dependencies['packages'].update(data[key])
+                            dependencies.update(data[key])
                         elif isinstance(data[key], dict):
-                            dependencies['packages'].update(data[key].keys())
-        except:
-            pass
-            
-    def _parse_toml_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Parse TOML-format dependency declarations"""
-        try:
-            import toml
-            data = toml.loads(content)
-            if isinstance(data, dict):
-                # Check for dependencies table
-                if 'dependencies' in data:
-                    dependencies['packages'].update(data['dependencies'].keys())
-                # Check for build-dependencies
-                if 'build-dependencies' in data:
-                    dependencies['packages'].update(data['build-dependencies'].keys())
-        except:
-            pass
-            
-    def _analyze_shell_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Analyze shell scripts for package usage patterns"""
-        # Common package manager commands
-        pm_patterns = {
-            'apt': r'apt-get\s+install\s+([^\n]+)',
-            'pacman': r'pacman\s+-S\s+([^\n]+)',
-            'dnf': r'dnf\s+install\s+([^\n]+)',
-            'yum': r'yum\s+install\s+([^\n]+)',
-            'brew': r'brew\s+install\s+([^\n]+)'
-        }
-        
-        for pattern in pm_patterns.values():
-            matches = re.finditer(pattern, content)
-            for match in matches:
-                packages = match.group(1).split()
-                dependencies['packages'].update(packages)
-                
-    def _detect_de_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Detect desktop environment related dependencies"""
-        de_patterns = {
-            'i3': ['i3-wm', 'i3status', 'i3blocks', 'i3lock'],
-            'awesome': ['awesome', 'awesome-extra'],
-            'xfce': ['xfce4', 'xfce4-goodies'],
-            'kde': ['plasma-desktop', 'kde-standard'],
-            'gnome': ['gnome-shell', 'gnome-session']
-        }
-        
-        for de, deps in de_patterns.items():
-            if de.lower() in content.lower():
-                dependencies['packages'].update(deps)
-                
-    def _detect_font_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Detect font dependencies"""
-        font_patterns = [
-            r'font-family:\s*[\'"]([^\'"]+)[\'"]',
-            r'fonts-\w+',
-            r'ttf-\w+',
-            r'otf-\w+'
-        ]
-        
-        for pattern in font_patterns:
-            matches = re.finditer(pattern, content)
-            for match in matches:
-                dependencies['fonts'].add(match.group(1))
-                
-    def _detect_service_dependencies(self, content: str, dependencies: Dict[str, set]) -> None:
-        """Detect system service dependencies"""
-        service_patterns = [
-            r'systemctl\s+(?:start|enable)\s+(\w+)',
-            r'service\s+(\w+)\s+start',
-            r'initctl\s+start\s+(\w+)'
-        ]
-        
-        for pattern in service_patterns:
-            matches = re.finditer(pattern, content)
-            for match in matches:
-                dependencies['services'].add(match.group(1))
+                            dependencies.update(data[key].keys())
+        except yaml.YAMLError as e:
+            self.logger.warning(f"YAML parse error in {file_path}: {e}")
+        except Exception as e:
+            self.logger.warning(f"Error parsing YAML dependencies in {file_path}: {e}")
+        return dependencies

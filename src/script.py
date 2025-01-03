@@ -1,80 +1,68 @@
-# src/scripts.py
-import subprocess
-import os
-from src.utils import setup_logger
-import shlex
-from typing import Dict
+# dotfilemanager/script.py
 
-logger = setup_logger()
+import subprocess
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+import logging
+
+from .exceptions import ScriptExecutionError
 
 class ScriptRunner:
+    """
+    Manages execution of scripts.
+    """
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initializes the ScriptRunner.
 
-    def __init__(self, verbose=False):
-        self.logger = setup_logger(verbose)
-        self.verbose = verbose
+        Args:
+            logger (Optional[logging.Logger]): Logger instance.
+        """
+        self.logger = logger or logging.getLogger('DotfileManager')
 
-    def _run_command(self, command, cwd=None, check=True, env = None):
-      """Runs a command and returns the result."""
-      try:
-          self.logger.debug(f"Running command: {' '.join(command)}")  # Log the command being run
-          
-          if command[0] == "git" and command[1] == "clone":
-            command.insert(2, "--config")
-            command.insert(3, "credential.helper=")
-          
-          result = subprocess.run(command, capture_output=True, text=True, check=check, cwd=cwd, env=env)
-          
-          if check and result.stderr:
-              self.logger.error(f"Command failed: {' '.join(command)}")
-              self.logger.error(f"Error:\n{result.stderr}")
-              return False
-          
-          if self.verbose:
-              self.logger.debug(f"Command ran successfully: {' '.join(command)}")
-              if result.stdout:
-                  self.logger.debug(f"Output:\n{result.stdout}")
-          
-          return result
-      except FileNotFoundError as e:
-          self.logger.error(f"Command not found. Make sure {command[0]} is installed: {e}")
-          return False
-      except Exception as e:
-         self.logger.error(f"Error executing command: {' '.join(command)}. Error: {e}")
-         return False
+    def run_scripts_by_phase(self, base_dir: Path, phase: str, script_config: Dict[str, Any], env: Optional[dict] = None) -> bool:
+        """
+        Runs scripts associated with a specific phase.
 
-    def run_script(self, script_path, cwd=None, shell="bash", check=True, env = None):
-        """Runs a script using the specified shell."""
-        if not os.path.exists(script_path):
-            self.logger.error(f"Script not found: {script_path}")
-            return False
-        
-        command = [shell, script_path]
-        return self._run_command(command, cwd, check, env)
-    
-    def run_scripts_by_phase(self, local_dir, phase, script_config, env = None):
-        """Runs scripts based on the specified phase."""
-        if not script_config or not script_config.get(phase):
-           return True  # No scripts to run for this phase
+        Args:
+            base_dir (Path): Base directory containing scripts.
+            phase (str): Phase name (e.g., 'pre_clone', 'post_install').
+            script_config (Dict[str, Any]): Configuration containing scripts for phases.
+            env (Optional[dict]): Environment variables for the scripts.
 
-        scripts = script_config.get(phase)
-        if not isinstance(scripts, list):
-            scripts = [scripts]  # Ensure it's a list
-        for script_path in scripts:
-          full_script_path = os.path.join(local_dir, script_path)
-          shell = script_config.get('shell', 'bash')
-          if os.path.exists(full_script_path):
-              self.logger.info(f"Executing {phase} script: {full_script_path}")
-              if not self.run_script(full_script_path, local_dir, shell, env = env):
-                  self.logger.error(f"Failed to execute {phase} script: {full_script_path}")
-                  return False
-          else:
-               self.logger.warning(f"{phase} script not found: {full_script_path}")
-        return True
-
-    def run_post_install_scripts(self, local_dir: str, env: Dict[str, str] = None) -> bool:
-        """Run post-install scripts."""
-        scripts = self._discover_scripts(local_dir).get("post_install", [])
+        Returns:
+            bool: True if all scripts run successfully, False otherwise.
+        """
+        scripts = script_config.get(phase, [])
         for script in scripts:
-            if not self.run_script(script, cwd=local_dir, env=env):
+            script_path = base_dir / script
+            if not script_path.exists():
+                self.logger.error(f"Script not found: {script_path}")
+                return False
+            if not self.run_script(script_path, env=env):
+                self.logger.error(f"Failed to execute script: {script_path}")
                 return False
         return True
+
+    def run_script(self, script_path: Path, env: Optional[dict] = None) -> bool:
+        """
+        Executes a single script.
+
+        Args:
+            script_path (Path): Path to the script.
+            env (Optional[dict]): Environment variables for the script.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            self.logger.info(f"Executing script: {script_path}")
+            result = subprocess.run([str(script_path)], check=True, shell=True, capture_output=True, text=True, env=env)
+            self.logger.debug(f"Script output: {result.stdout}")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Script {script_path} failed with error: {e.stderr}")
+            raise ScriptExecutionError(f"Script {script_path} failed.")
+        except Exception as e:
+            self.logger.error(f"Unexpected error while executing script {script_path}: {e}")
+            raise ScriptExecutionError(f"Script {script_path} failed due to unexpected error.")

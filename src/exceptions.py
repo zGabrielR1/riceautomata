@@ -1,15 +1,11 @@
+# dotfilemanager/exceptions.py
+
 class RiceAutomataError(Exception):
-    """Base exception class for RiceAutomata."""
-    def __init__(self, message: str, details: str = None):
-        super().__init__(message)
-        self.details = details
-    def __str__(self):
-        if self.details:
-            return f"{super().__str__()}\nDetails: {self.details}"
-        return super().__str__()
+    """Base exception for DotfileManager errors."""
+    pass
 
 class ConfigurationError(RiceAutomataError):
-    """Raised when there's an error in configuration."""
+    """Raised when there is a configuration error."""
     pass
 
 class GitOperationError(RiceAutomataError):
@@ -25,13 +21,25 @@ class ValidationError(RiceAutomataError):
     pass
 
 class RollbackError(RiceAutomataError):
-    """Raised when rollback operation fails."""
+    """Raised when a rollback operation fails."""
     pass
 
 class TemplateRenderingError(RiceAutomataError):
-    """Raised when there's an error in template rendering."""
+    """Raised when template rendering fails."""
     pass
 
 class ScriptExecutionError(RiceAutomataError):
     """Raised when script execution fails."""
+    pass
+
+class PackageManagerError(RiceAutomataError):
+    """Raised when package manager operations fail."""
+    pass
+
+class OSManagerError(RiceAutomataError):
+    """Raised when OS-specific operations fail."""
+    pass
+
+class BackupError(RiceAutomataError):
+    """Raised when backup operations fail."""
     pass

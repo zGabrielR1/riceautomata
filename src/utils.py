@@ -1,77 +1,50 @@
+# dotfilemanager/utils.py
+
+import re
+import shutil
+import time
+from pathlib import Path
+from typing import Optional
 import logging
-import os
-import sys
-from datetime import datetime
-import traceback
 
-def setup_logger(verbose=False, log_file=None):
-    """Sets up the logger for the application."""
+def sanitize_path(path_str: str) -> Path:
+    """
+    Sanitizes a given path string and returns a Path object.
 
-    log_level = logging.DEBUG if verbose else logging.INFO
-    log_format = "[%(asctime)s] [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s"
-    date_format = "%Y-%m-%d %H:%M:%S"
-    formatter = logging.Formatter(log_format, datefmt=date_format)
+    Args:
+        path_str (str): The path string to sanitize.
 
-    logger = logging.getLogger('riceautomator')
-    logger.setLevel(log_level)
+    Returns:
+        Path: Sanitized Path object.
+    """
+    path = Path(path_str).expanduser().resolve()
+    # Additional sanitization rules can be added here
+    return path
 
-    if log_file:
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+def create_timestamp() -> str:
+    """
+    Creates a timestamp string.
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    Returns:
+        str: Timestamp in YYYYMMDD_HHMMSS format.
+    """
+    return time.strftime("%Y%m%d_%H%M%S")
 
-    return logger
+def confirm_action(prompt: str) -> bool:
+    """
+    Prompts the user for confirmation.
 
+    Args:
+        prompt (str): The prompt message.
 
-def sanitize_path(path):
-    """Sanitizes a path to prevent directory traversal."""
-    return os.path.abspath(os.path.expanduser(path))
-
-def sanitize_url(url):
-    """Sanitizes a URL to check for basic validity."""
-    if not url.startswith(("http://", "https://")):
-        raise ValueError("Invalid URL format. URL must start with 'http://' or 'https://'")
-    return url
-
-def confirm_action(message, default=True):
-    """Prompts the user for confirmation."""
-    if default:
-        prompt = f"{message} [Y/n]: "
-    else:
-        prompt = f"{message} [y/N]: "
-
+    Returns:
+        bool: True if user confirms, False otherwise.
+    """
     while True:
-        choice = input(prompt).strip().lower()
-        if choice == 'y' or choice == 'yes' :
+        choice = input(f"{prompt} (y/n): ").strip().lower()
+        if choice in ['y', 'yes']:
             return True
-        elif choice == 'n' or choice == 'no':
+        elif choice in ['n', 'no']:
             return False
-        elif choice == '' and default:
-          return True
-        elif choice == '' and not default:
-          return False
         else:
-          print("Please answer with 'yes' or 'no'.")
-
-def create_timestamp():
-    """Create timestamp for the configuration file."""
-    now = datetime.now()
-    return now.isoformat()
-
-def exception_handler(exc_type, exc_value, exc_traceback):
-    """Handles unhandled exceptions and logs the error before exiting."""
-    logger = logging.getLogger('riceautomator')
-    
-    tb_list = traceback.extract_tb(exc_traceback)
-    last_call = tb_list[-1]
-    filename, lineno, function, code = last_call
-
-    logger.error("An unhandled exception occurred:")
-    logger.error(f"  Type: {exc_type.__name__}")
-    logger.error(f"  Value: {exc_value}")
-    logger.error(f"  File: {filename}, Line: {lineno}, Function: {function}")
-    sys.exit(1)
+            print("Please respond with 'y' or 'n'.")
