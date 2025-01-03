@@ -1,5 +1,3 @@
-# dotfilemanager/dotfile_manager.py
-
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
 import subprocess
@@ -7,11 +5,11 @@ import shutil
 import datetime
 import time
 import re
-import asyncio
 import logging
 import json
+from contextlib import contextmanager
 
-from .config import ConfigManager
+from .config import ConfigManager, RepositoryConfig
 from .backup import BackupManager
 from .logger import setup_logger
 from .script import ScriptRunner
@@ -32,18 +30,21 @@ from .exceptions import (
     BackupError,
 )
 from .utils import sanitize_path, create_timestamp, confirm_action
-from .package_manager import PackageManagerInterface, PacmanPackageManager, AptPackageManager
+from .package_manager import PackageManagerInterface, PacmanPackageManager, AptPackageManager, AURHelperManager
 from .os_manager import OSManager
-from .config import ConfigManager, RepositoryConfig
+
 
 class DotfileManager:
     """
     Manages cloning, applying, backing up, and managing dotfiles configurations.
     """
-    def __init__(self, 
-                 verbose: bool = False, 
-                 config_path: Optional[Path] = None, 
-                 log_file: Optional[str] = None):
+
+    def __init__(
+        self,
+        verbose: bool = False,
+        config_path: Optional[Path] = None,
+        log_file: Optional[str] = None
+    ):
         """
         Initializes the DotfileManager.
 
@@ -69,7 +70,6 @@ class DotfileManager:
         self._ensure_managed_dir()
         self._initialize_package_manager()
 
-
     def _install_packages(self, packages: Dict[str, Set[str]]) -> bool:
         """
         Install detected packages using appropriate package managers.
@@ -80,7 +80,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             # Update package databases if necessary
             package_manager_name = self.os_manager.get_package_manager()
@@ -88,7 +87,7 @@ class DotfileManager:
                 self.logger.error("No supported package manager found.")
                 return False
 
-            if 'pacman' in packages and self.package_manager:
+            if 'pacman' in packages and isinstance(self.package_manager, PacmanPackageManager):
                 pacman_packages = list(packages['pacman'])
                 if pacman_packages:
                     self.logger.info(f"Installing pacman packages: {', '.join(pacman_packages)}")
@@ -105,8 +104,11 @@ class DotfileManager:
                         return False
 
             return True
+        except PackageManagerError as e:
+            self.logger.error(f"Package manager error during installation: {e}")
+            return False
         except Exception as e:
-            self.logger.error(f"Error installing packages: {e}")
+            self.logger.error(f"Unexpected error installing packages: {e}")
             return False
 
     def _ensure_managed_dir(self) -> None:
@@ -120,12 +122,12 @@ class DotfileManager:
             self.logger.error(f"Failed to create managed rices directory: {e}")
             raise FileOperationError(f"Failed to create managed rices directory: {e}")
 
-    def _load_dependency_map(self) -> Dict[str, str]:
+    def _load_dependency_map(self) -> Dict[str, Any]:
         """
         Loads the dependency map from the configuration.
 
         Returns:
-            Dict[str, str]: Dependency map.
+            Dict[str, Any]: Dependency map.
         """
         try:
             rules_path = Path(__file__).parent.parent / "configs" / "dependency_map.json"
@@ -154,7 +156,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             if repository_name:
                 profiles = self.config_manager.get_profiles(repository_name)
@@ -168,15 +169,19 @@ class DotfileManager:
                     self.logger.info("No profiles found.")
                     return True
                 self.logger.info("All profiles:")
-            
+
             for repo, repo_profiles in profiles.items():
-                active_marker = "*" if self.config_manager.get_active_profile(repo) == repo_profiles.get('active') else " "
+                active_profile = self.config_manager.get_active_profile(repo)
+                active_marker = "*" if active_profile else " "
                 self.logger.info(f"{active_marker} Repository: {repo}")
-                for profile_name, profile_info in repo_profiles['profiles'].items():
-                    active = "(Active)" if profile_name == self.config_manager.get_active_profile(repo) else ""
+                for profile_name, profile_info in repo_profiles.get('profiles', {}).items():
+                    active = "(Active)" if profile_name == active_profile else ""
                     description = profile_info.get('description', '')
                     self.logger.info(f"    - {profile_name} {active}: {description}")
             return True
+        except ConfigurationError as e:
+            self.logger.error(f"Configuration error while listing profiles: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to list profiles: {e}")
             return False
@@ -192,7 +197,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             current_repo = self._get_current_rice()
             if not current_repo:
@@ -202,6 +206,9 @@ class DotfileManager:
             self.config_manager.create_profile(current_repo, profile_name, description)
             self.logger.info(f"Profile '{profile_name}' created for repository '{current_repo}'.")
             return True
+        except ValidationError as e:
+            self.logger.error(f"Validation error while creating profile '{profile_name}': {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to create profile '{profile_name}': {e}")
             return False
@@ -216,7 +223,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is mostly the same, minor refactoring done
         try:
             if repository_url.startswith('git://'):
                 repository_url = repository_url.replace('git://', 'https://')
@@ -237,7 +243,8 @@ class DotfileManager:
                     self.logger.info(f"Repository cloned successfully to: {local_dir}")
             except subprocess.CalledProcessError as e:
                 self.logger.error(f"Git clone failed: {e}")
-                self.backup_manager.rollback_backup(repository_name=repo_name, backup_name=create_timestamp(), target_dir=local_dir)
+                if backup_id:
+                    self.backup_manager.rollback_backup(repository_name=repo_name, backup_name=backup_id, target_dir=local_dir)
                 return False
 
             # Update configuration
@@ -278,8 +285,6 @@ class DotfileManager:
             self.logger.error(f"Unexpected error during repository cloning: {e}")
             return False
 
-    from contextlib import contextmanager
-
     @contextmanager
     def _transactional_operation(self, operation_name: str):
         """
@@ -295,13 +300,17 @@ class DotfileManager:
             yield
         except Exception as e:
             self.logger.error(f"An error occurred during {operation_name}: {e}")
-            # Implement rollback logic if necessary
-            raise
+            # Placeholder for rollback logic
+            # Example: self.rollback(operation_name)
+            raise RollbackError(f"Rollback due to error in {operation_name}: {e}")
 
-
-
-    def export_configuration(self, repository_name: str, output_file: str, 
-                             include_deps: bool = False, include_assets: bool = False) -> bool:
+    def export_configuration(
+        self,
+        repository_name: str,
+        output_file: str,
+        include_deps: bool = False,
+        include_assets: bool = False
+    ) -> bool:
         """
         Exports the configuration of a repository to a JSON file.
 
@@ -314,7 +323,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             config = self.config_manager.get_rice_config(repository_name)
             if not config:
@@ -341,12 +349,20 @@ class DotfileManager:
                 json.dump(export_data, f, indent=4)
                 self.logger.info(f"Configuration exported to '{output_file}'.")
             return True
+        except IOError as e:
+            self.logger.error(f"I/O error while exporting configuration: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to export configuration: {e}")
             return False
 
-    def import_configuration(self, file_path: str, new_name: Optional[str] = None, 
-                             skip_deps: bool = False, skip_assets: bool = False) -> bool:
+    def import_configuration(
+        self,
+        file_path: str,
+        new_name: Optional[str] = None,
+        skip_deps: bool = False,
+        skip_assets: bool = False
+    ) -> bool:
         """
         Imports a configuration from a JSON file.
 
@@ -359,7 +375,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 import_data = json.load(f)
@@ -398,36 +413,46 @@ class DotfileManager:
             # Install dependencies if not skipped
             if not skip_deps and dependencies:
                 self.logger.info("Installing dependencies from imported configuration...")
-                if self.package_manager:
-                    if not self.package_manager.install_packages(list(dependencies)):
-                        self.logger.error("Failed to install dependencies.")
-                        return False
+                required_packages = {'pacman': set(dependencies), 'aur': set()}
+                if not self._install_packages(required_packages):
+                    self.logger.error("Failed to install dependencies.")
+                    return False
 
             # Import assets if not skipped
             if not skip_assets and assets:
                 self.logger.info("Importing assets from imported configuration...")
                 # Implement asset import logic here
-                # Placeholder for actual implementation
                 for asset in assets:
                     self.logger.info(f"Imported asset: {asset}")
+                    # Placeholder for actual implementation
 
             self.logger.info(f"Configuration imported successfully as '{repository_name}'.")
             return True
+        except FileNotFoundError as e:
+            self.logger.error(f"Import file not found: {e}")
+            return False
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid JSON in import file: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to import configuration: {e}")
             return False
-    
+
     def _backup_existing_config(self, target_path: Path) -> Optional[Path]:
         """Backs up an existing configuration file or directory."""
         if target_path.exists() or target_path.is_symlink():
             backup_path = target_path.with_suffix(f'.bak.{create_timestamp()}')
-            if target_path.is_symlink():
-                target_path.unlink()
-                self.logger.info(f"Removed existing symlink: {target_path}")
-            else:
-                shutil.move(str(target_path), str(backup_path))
-                self.logger.info(f"Backed up existing config to {backup_path}")
-            return backup_path
+            try:
+                if target_path.is_symlink():
+                    target_path.unlink()
+                    self.logger.info(f"Removed existing symlink: {target_path}")
+                else:
+                    shutil.move(str(target_path), str(backup_path))
+                    self.logger.info(f"Backed up existing config to {backup_path}")
+                return backup_path
+            except Exception as e:
+                self.logger.error(f"Failed to backup {target_path}: {e}")
+                raise FileOperationError(f"Failed to backup {target_path}: {e}")
         return None
 
     def _stow_item(self, local_dir: Path, item_name: str, stow_options: List[str]) -> bool:
@@ -441,13 +466,23 @@ class DotfileManager:
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to stow {item_name}: {e}")
             return False
-            
-    def apply_dotfiles(self, repository_name: str, stow_options: Optional[List[str]] = None,
-                      package_manager: Optional[PackageManagerInterface] = None,
-                      target_packages: Optional[List[str]] = None, overwrite_symlink: Optional[str] = None,
-                      custom_paths: Optional[Dict[str, str]] = None, ignore_rules: bool = False,
-                      template_context: Dict[str, Any] = {}, discover_templates: bool = False,
-                      custom_scripts: Optional[List[str]] = None) -> bool:
+        except FileNotFoundError:
+            self.logger.error("GNU Stow is not installed or not found in PATH.")
+            return False
+
+    def apply_dotfiles(
+        self,
+        repository_name: str,
+        stow_options: Optional[List[str]] = None,
+        package_manager: Optional[PackageManagerInterface] = None,
+        target_packages: Optional[List[str]] = None,
+        overwrite_symlink: Optional[str] = None,
+        custom_paths: Optional[Dict[str, str]] = None,
+        ignore_rules: bool = False,
+        template_context: Dict[str, Any] = {},
+        discover_templates: bool = False,
+        custom_scripts: Optional[List[str]] = None
+    ) -> bool:
         """
         Applies dotfiles from a repository using GNU Stow.
 
@@ -479,7 +514,7 @@ class DotfileManager:
             repo_config = self.config_manager.get_repository_config(local_dir)
             if not repo_config:
                 self.logger.warning(f"No 'rice.json' found for repository '{repository_name}'. Using default behavior.")
-                repo_config = {}  # Use an empty dictionary as a fallback
+                repo_config = RepositoryConfig()  # Use an empty configuration as a fallback
 
             # 1. Install required packages
             if not self._install_required_packages(local_dir, repo_config):
@@ -488,7 +523,7 @@ class DotfileManager:
             # 2. Discover dotfile directories
             dotfile_dirs = self._discover_dotfile_directories(
                 local_dir,
-                repo_config=repo_config,  # Pass the RepositoryConfig instance
+                repo_config=repo_config,
                 target_packages=target_packages,
                 custom_paths=custom_paths,
                 ignore_rules=ignore_rules
@@ -500,7 +535,7 @@ class DotfileManager:
             # 4. Apply dotfiles using Stow
             for item_name, item_category in dotfile_dirs.items():
                 item_path = Path(item_name)
-                # a. Backup existing config
+                # a. Backup existing config if category is 'config'
                 if item_category == "config":
                     target_path = config_home / item_path.name
                     self._backup_existing_config(target_path)
@@ -511,10 +546,10 @@ class DotfileManager:
 
                 # c. Record the applied item in config
                 rice_config["dotfile_directories"][str(item_path)] = item_category
-                rice_config["profiles"]["default"]["configs"].append(
+                rice_config["profiles"]["default"].setdefault('configs', []).append(
                     {
                         "name": item_path.name,
-                        "path": str(config_home / item_path.name),  # Assuming stow target is ~/.config
+                        "path": str(config_home / item_path.name),
                         "type": item_category,
                         "applied_at": create_timestamp(),
                     }
@@ -522,34 +557,35 @@ class DotfileManager:
 
             # 5. Handle templates
             if discover_templates:
-                template_config = repo_config.get_template_config()
-                template_dir = local_dir / template_config.get("directory", "templates")
-                if not self._handle_templates(template_dir, template_context):
+                if not self._handle_templates(local_dir, template_context):
                     return False
 
             # 6. Run custom scripts
-            scripts_config = repo_config.get_scripts()
-            if not self._run_custom_scripts(local_dir, scripts_config):
-                return False
+            if custom_scripts:
+                if not self._run_custom_scripts(local_dir, custom_scripts):
+                    return False
 
             # 7. Update rice config
             self._update_rice_config(repository_name, rice_config)
             return True
 
-        except KeyError as e:
-            self.logger.error(f"Missing key in configuration: {e}")
+        except ConfigurationError as e:
+            self.logger.error(f"Configuration error: {e}")
             return False
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            self.logger.error(f"Error executing command: {e}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Subprocess error: {e}")
+            return False
+        except FileNotFoundError as e:
+            self.logger.error(f"File not found error: {e}")
             return False
         except Exception as e:
             self.logger.error(f"An unexpected error occurred: {e}")
             return False
 
-    def _install_required_packages(self, local_dir: Path) -> bool:
+    def _install_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> bool:
         """Detects and installs required packages."""
-        required_packages = self._detect_required_packages(local_dir)
-        if required_packages and (required_packages['pacman'] or required_packages['aur']):
+        required_packages = self._detect_required_packages(local_dir, repo_config)
+        if required_packages and (required_packages.get('pacman') or required_packages.get('aur')):
             self.logger.info("Installing required packages for the rice configuration...")
             if not self._install_packages(required_packages):
                 self.logger.error("Failed to install required packages")
@@ -565,9 +601,11 @@ class DotfileManager:
             if not self.template_handler.render_templates(template_dir, target_template_dir, template_context):
                 self.logger.error("Failed to process templates.")
                 return False
+        else:
+            self.logger.warning(f"Template directory '{template_dir}' does not exist.")
         return True
 
-    def _run_custom_scripts(self, local_dir: Path, custom_scripts: Optional[List[str]]) -> bool:
+    def _run_custom_scripts(self, local_dir: Path, custom_scripts: List[str]) -> bool:
         """Executes custom scripts."""
         if custom_scripts:
             self.logger.info("Executing custom scripts...")
@@ -590,93 +628,14 @@ class DotfileManager:
                 target_path = config_home / item_path.name
                 self._backup_existing_config(target_path)
 
-    def apply_dotfiles(self, repository_name: str, stow_options: Optional[List[str]] = None, 
-                      package_manager: Optional[PackageManagerInterface] = None, 
-                      target_packages: Optional[List[str]] = None, overwrite_symlink: Optional[str] = None, 
-                      custom_paths: Optional[Dict[str, str]] = None, ignore_rules: bool = False, 
-                      template_context: Dict[str, Any] = {}, discover_templates: bool = False, 
-                      custom_scripts: Optional[List[str]] = None) -> bool:
-        """
-        Applies dotfiles from a repository using GNU Stow.
-
-        Args:
-            repository_name (str): Name of the repository.
-            stow_options (Optional[List[str]]): Additional options for stow.
-            package_manager (Optional[PackageManagerInterface]): Package manager instance.
-            target_packages (Optional[List[str]]): List of target packages.
-            overwrite_symlink (Optional[str]): Path to overwrite existing symlinks.
-            custom_paths (Optional[Dict[str, str]]): Custom paths for extra directories.
-            ignore_rules (bool): Whether to ignore rules during application.
-            template_context (Dict[str, Any]): Context for template rendering.
-            discover_templates (bool): Whether to discover and process templates.
-            custom_scripts (Optional[List[str]]): Additional scripts to run.
-
-        Returns:
-            bool: True if successful, False otherwise.
-        """
-        try:
-            rice_config = self.config_manager.get_rice_config(repository_name)
-            if not rice_config:
-                raise ConfigurationError(f"No configuration found for repository: {repository_name}")
-
-            local_dir = Path(rice_config['local_directory'])
-            config_home = Path.home() / ".config"
-            config_home.mkdir(parents=True, exist_ok=True)
-
-            # 1. Install required packages
-            if not self._install_required_packages(local_dir):
-                return False
-
-            # 2. Discover dotfile directories
-            dotfile_dirs = self._discover_dotfile_directories(
-                local_dir,
-                target_packages=target_packages,
-                custom_paths=custom_paths,
-                ignore_rules=ignore_rules
-            )
-
-            # 3. Backup existing configurations
-            self._backup_existing_configs(config_home, dotfile_dirs)
-
-            # 4. Apply dotfiles using Stow
-            for item_name, item_category in dotfile_dirs.items():
-                item_path = Path(item_name)
-                # a. Stow item
-                if not self._stow_item(local_dir, item_path.name, stow_options or []):
-                    return False
-
-                # b. Record the applied item in config
-                rice_config['dotfile_directories'][str(item_path)] = item_category
-                rice_config['profiles']['default']['configs'].append({
-                    'name': item_path.name,
-                    'path': str(config_home / item_path.name),  # Assuming stow target is ~/.config
-                    'type': item_category,
-                    'applied_at': create_timestamp()
-                })
-
-            # 5. Handle templates
-            if discover_templates and not self._handle_templates(local_dir, template_context):
-                return False
-
-            # 6. Run custom scripts
-            if not self._run_custom_scripts(local_dir, custom_scripts):
-                return False
-
-            # 7. Update rice config
-            self._update_rice_config(repository_name, rice_config)
-            return True
-
-        except KeyError as e:
-            self.logger.error(f"Missing key in configuration: {e}")
-            return False
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            self.logger.error(f"Error executing command: {e}")
-            return False
-        except Exception as e:
-            self.logger.error(f"An unexpected error occurred: {e}")
-            return False
-
-    def _discover_dotfile_directories(self, local_dir: Path, repo_config: Optional[RepositoryConfig] = None, target_packages: Optional[List[str]] = None, custom_paths: Optional[Dict[str, str]] = None, ignore_rules: bool = False) -> Dict[str, str]:
+    def _discover_dotfile_directories(
+        self,
+        local_dir: Path,
+        repo_config: Optional[RepositoryConfig] = None,
+        target_packages: Optional[List[str]] = None,
+        custom_paths: Optional[Dict[str, str]] = None,
+        ignore_rules: bool = False
+    ) -> Dict[str, str]:
         """
         Discovers dotfile directories based on repository configuration, predefined rules, target packages, and custom paths.
 
@@ -690,7 +649,7 @@ class DotfileManager:
         Returns:
             Dict[str, str]: A dictionary mapping discovered directory paths to their categories.
         """
-        dotfile_dirs = {}
+        dotfile_dirs: Dict[str, str] = {}
 
         # Prioritize repository-specific configuration
         if repo_config:
@@ -701,6 +660,8 @@ class DotfileManager:
                 if dir_path.is_dir():
                     category = repo_config.get_dotfile_categories().get(directory, "config")
                     dotfile_dirs[str(dir_path)] = category
+                else:
+                    self.logger.warning(f"Directory '{dir_path}' specified in repository config does not exist.")
 
         # Apply predefined rules if not ignoring rules
         if not ignore_rules:
@@ -713,16 +674,17 @@ class DotfileManager:
         # Consider target packages if provided
         if target_packages:
             for package in target_packages:
-                if package in self.dependency_map:
-                    dir_names = self.dependency_map[package]
-                    if isinstance(dir_names, str):
-                        dir_names = [dir_names]
-                    for dir_name in dir_names:
-                        dir_path = local_dir / dir_name
-                        if dir_path.is_dir():
-                            category = self._categorize_directory(dir_path)
-                            if category:
-                                dotfile_dirs[str(dir_path)] = category
+                dirs = self.dependency_map.get(package, [])
+                if isinstance(dirs, str):
+                    dirs = [dirs]
+                for dir_name in dirs:
+                    dir_path = local_dir / dir_name
+                    if dir_path.is_dir():
+                        category = self._categorize_directory(dir_path)
+                        if category:
+                            dotfile_dirs[str(dir_path)] = category
+                    else:
+                        self.logger.warning(f"Directory '{dir_path}' for package '{package}' does not exist.")
 
         # Add custom paths
         if custom_paths:
@@ -735,7 +697,7 @@ class DotfileManager:
                     self.logger.warning(f"Custom path does not exist: {abs_path}")
 
         return dotfile_dirs
-    
+
     def _categorize_directory(self, directory: Path) -> Optional[str]:
         """
         Categorizes a directory based on its name or content.
@@ -755,7 +717,7 @@ class DotfileManager:
             return "script"
         elif dir_name in ("wallpapers", "backgrounds"):
             return "wallpaper"
-        elif dir_name == "themes" or dir_name == "styles" or dir_name in ["gtk-3.0", "gtk-4.0"]:
+        elif dir_name in ["themes", "styles", "gtk-3.0", "gtk-4.0"]:
             return "theme"
         elif dir_name == "extras":
             return "extra"
@@ -779,7 +741,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             snapshots_dir = Path.home() / ".config" / "riceautomator" / "snapshots"
             snapshots_dir.mkdir(parents=True, exist_ok=True)
@@ -790,8 +751,6 @@ class DotfileManager:
                 return False
 
             # Implement snapshot creation logic here
-            # This could involve copying essential configuration files, capturing package lists, etc.
-            # Placeholder for actual implementation
             snapshot_path.mkdir()
             self.logger.info(f"Snapshot '{name}' created successfully.")
 
@@ -808,6 +767,9 @@ class DotfileManager:
             self.logger.debug(f"Snapshot metadata saved at '{snapshot_path}/metadata.json'.")
 
             return True
+        except IOError as e:
+            self.logger.error(f"I/O error while creating snapshot '{name}': {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to create snapshot '{name}': {e}")
             return False
@@ -819,7 +781,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             snapshots_dir = Path.home() / ".config" / "riceautomator" / "snapshots"
             if not snapshots_dir.exists():
@@ -849,7 +810,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             snapshots_dir = Path.home() / ".config" / "riceautomator" / "snapshots"
             snapshot_path = snapshots_dir / name
@@ -859,9 +819,6 @@ class DotfileManager:
                 return False
 
             # Implement snapshot restoration logic here
-            # This could involve restoring configuration files, reinstalling packages, etc.
-            # Placeholder for actual implementation
-            # For example, restore configurations
             metadata_file = snapshot_path / "metadata.json"
             if metadata_file.exists():
                 with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -872,6 +829,9 @@ class DotfileManager:
 
             self.logger.info(f"Snapshot '{name}' restored successfully.")
             return True
+        except IOError as e:
+            self.logger.error(f"I/O error while restoring snapshot '{name}': {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to restore snapshot '{name}': {e}")
             return False
@@ -886,7 +846,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             snapshots_dir = Path.home() / ".config" / "riceautomator" / "snapshots"
             snapshot_path = snapshots_dir / name
@@ -898,10 +857,12 @@ class DotfileManager:
             shutil.rmtree(snapshot_path)
             self.logger.info(f"Snapshot '{name}' deleted successfully.")
             return True
+        except shutil.Error as e:
+            self.logger.error(f"Shutil error while deleting snapshot '{name}': {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to delete snapshot '{name}': {e}")
             return False
-
 
     def _initialize_package_manager(self) -> None:
         """
@@ -913,17 +874,16 @@ class DotfileManager:
             if isinstance(self.package_manager, PacmanPackageManager):
                 if not self.package_manager.is_aur_helper_installed():
                     self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' not found. Attempting to install...")
-                    if self.package_manager.install_aur_helper():
+                    self.aur_helper_manager = AURHelperManager(logger=self.logger)
+                    if self.aur_helper_manager.install_aur_helper():
                         self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' installed successfully.")
                     else:
                         self.logger.error(f"Failed to install AUR helper '{self.package_manager.aur_helper}'.")
-        elif os_type == "debian":  # Example for Debian/Ubuntu
+        elif os_type in ["debian", "ubuntu"]:
             self.package_manager = AptPackageManager(logger=self.logger)
         # ... Add more OS type checks and corresponding package manager initializations
         else:
             self.logger.warning(f"Unsupported operating system: {os_type}. Package management features will be limited.")
-
-
 
     def _get_installed_packages(self) -> Dict[str, List[str]]:
         """
@@ -932,40 +892,50 @@ class DotfileManager:
         Returns:
             Dict[str, List[str]]: Installed packages categorized by package manager.
         """
-        # Implementation is the same as before, no changes needed
-        installed_packages = {}
+        installed_packages: Dict[str, List[str]] = {}
         try:
             # Example for Pacman
-            if self.package_manager and isinstance(self.package_manager, PacmanManager):
+            if isinstance(self.package_manager, PacmanPackageManager):
                 result = subprocess.run(['pacman', '-Qq'], capture_output=True, text=True)
                 if result.returncode == 0:
                     installed_packages['pacman'] = result.stdout.strip().split('\n')
+
             # Example for AUR helper
-            if self.aur_helper_manager and shutil.which('yay'):
-                result = subprocess.run(['yay', '-Qq'], capture_output=True, text=True)
+            if self.aur_helper_manager and shutil.which(self.aur_helper_manager.helper_name):
+                result = subprocess.run([self.aur_helper_manager.helper_name, '-Qq'], capture_output=True, text=True)
                 if result.returncode == 0:
                     installed_packages['aur'] = result.stdout.strip().split('\n')
+
+            # Example for Apt
+            if isinstance(self.package_manager, AptPackageManager):
+                result = subprocess.run(['dpkg-query', '-f', '${binary:Package}\n', '-W'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    installed_packages['apt'] = result.stdout.strip().split('\n')
+
             # Add other package managers as needed
+            return installed_packages
+        except subprocess.SubprocessError as e:
+            self.logger.warning(f"Subprocess error while retrieving installed packages: {e}")
             return installed_packages
         except Exception as e:
             self.logger.warning(f"Failed to retrieve installed packages: {e}")
             return installed_packages
 
-
-    def _detect_required_packages(self, local_dir: Path) -> Dict[str, Set[str]]:
+    def _detect_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> Dict[str, Set[str]]:
         """
         Detect required packages based on dotfile structure and dependency map.
 
         Args:
             local_dir (Path): Directory to analyze.
+            repo_config (RepositoryConfig): Repository configuration.
 
         Returns:
             Dict[str, Set[str]]: Required packages categorized by package manager.
         """
-        # Implementation is the same as before, no changes needed
-        required_packages = {
+        required_packages: Dict[str, Set[str]] = {
             'pacman': {'base-devel', 'git', 'curl', 'wget'},  # Base packages
-            'aur': set()
+            'aur': set(),
+            'apt': set()
         }
 
         # Load dependency map
@@ -978,8 +948,12 @@ class DotfileManager:
         for item in local_dir.iterdir():
             if item.name in dependency_map:
                 package = dependency_map[item.name]
-                required_packages['pacman'].add(package)
-                self.logger.info(f"Detected {item.name} configuration, adding package {package}")
+                if isinstance(package, str):
+                    required_packages['pacman'].add(package)
+                    self.logger.info(f"Detected {item.name} configuration, adding package {package}")
+                elif isinstance(package, list):
+                    required_packages['pacman'].update(package)
+                    self.logger.info(f"Detected {item.name} configurations, adding packages {', '.join(package)}")
 
             # Special handling for .oh-my-zsh plugins
             if item.name == '.oh-my-zsh':
@@ -1005,7 +979,12 @@ class DotfileManager:
 
         return required_packages
 
-    def manage_dotfiles(self, profile_name: str, target_files: List[str], dry_run: bool = False) -> bool:
+    def manage_dotfiles(
+        self,
+        profile_name: str,
+        target_files: List[str],
+        dry_run: bool = False
+    ) -> bool:
         """
         Manages specific dotfiles by applying or unlinking them.
 
@@ -1017,7 +996,6 @@ class DotfileManager:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Implementation is the same as before, no changes needed
         try:
             current_repo = self._get_current_rice()
             if not current_repo:
@@ -1031,8 +1009,6 @@ class DotfileManager:
 
             if dry_run:
                 self.logger.info("Dry run enabled. Previewing changes...")
-                # Implement dry-run logic here
-                # For example, list the changes that would be made
                 for file in target_files:
                     self.logger.info(f"[Dry Run] Would manage: {file}")
                 return True
@@ -1040,17 +1016,30 @@ class DotfileManager:
             # Implement actual management logic
             for file in target_files:
                 self.logger.info(f"Managing dotfile: {file}")
-                # Example: Unlink and relink using Stow or other methods
-                # This is a placeholder for actual implementation
-                success = self.file_ops.remove_files(Path(file))
-                if success:
-                    self.file_ops.copy_files(Path(file), Path.home() / file)
+                target_path = Path.home() / file
+                if target_path.exists() or target_path.is_symlink():
+                    self._backup_existing_config(target_path)
+
+                # Assuming copying from managed directory
+                source_path = self.managed_rices_dir / current_repo / file
+                if source_path.exists():
+                    try:
+                        if source_path.is_dir():
+                            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(source_path, target_path)
+                        self.logger.info(f"Copied {source_path} to {target_path}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to copy {source_path} to {target_path}: {e}")
+                        return False
                 else:
-                    self.logger.error(f"Failed to manage dotfile: {file}")
-                    return False
+                    self.logger.warning(f"Source file {source_path} does not exist. Skipping.")
 
             self.logger.info(f"Successfully managed dotfiles for profile '{profile_name}'.")
             return True
+        except ConfigurationError as e:
+            self.logger.error(f"Configuration error while managing dotfiles: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to manage dotfiles: {e}")
             return False
@@ -1062,13 +1051,16 @@ class DotfileManager:
         Returns:
             Optional[str]: Name of the current rice if exists, else None.
         """
-        # Implementation is the same as before, no changes needed
-        for repo_name, config in self.config_manager.config_data.get('rices', {}).items():
-            if config.get('applied', False):
-                self.logger.debug(f"Current rice is: {repo_name}")
-                return repo_name
-        self.logger.debug("No current rice found.")
-        return None
+        try:
+            for repo_name, config in self.config_manager.config_data.get('rices', {}).items():
+                if config.get('applied', False):
+                    self.logger.debug(f"Current rice is: {repo_name}")
+                    return repo_name
+            self.logger.debug("No current rice found.")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error retrieving current rice: {e}")
+            return None
 
     def _uninstall_dotfiles(self, repository_name: str) -> bool:
         """
@@ -1155,6 +1147,9 @@ class DotfileManager:
             else:
                 self.logger.error("Failed to unlink all the symlinks.")
                 return False
+        except RollbackError as e:
+            self.logger.error(f"Rollback error during uninstallation: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"An error occurred while uninstalling dotfiles: {e}")
             return False
@@ -1186,6 +1181,7 @@ class DotfileManager:
             for directory, category in rice_config.get('dotfile_directories', {}).items():
                 target_path = Path(directory)
                 if not target_path.exists():
+                    self.logger.warning(f"Target path {target_path} does not exist. Skipping...")
                     continue
                 backup_target = backup_dir / target_path.name
                 try:
@@ -1208,6 +1204,9 @@ class DotfileManager:
 
             self.logger.info(f"Backup created successfully at {backup_dir}")
             return True
+        except IOError as e:
+            self.logger.error(f"I/O error while creating backup: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"An error occurred while creating backup: {e}")
             return False
@@ -1275,6 +1274,193 @@ class DotfileManager:
 
             self.logger.info(f"Successfully restored backup '{backup_name}' for repository '{repository_name}'.")
             return True
+        except IOError as e:
+            self.logger.error(f"I/O error while restoring backup: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to restore backup '{backup_name}' for repository '{repository_name}': {e}")
+            return False
+
+    def _initialize_package_manager(self) -> None:
+        """
+        Initializes the appropriate package manager based on the OS.
+        """
+        os_type = self.os_manager.get_os_type()
+        if os_type == "arch":
+            self.package_manager = PacmanPackageManager(logger=self.logger)
+            if isinstance(self.package_manager, PacmanPackageManager):
+                if not self.package_manager.is_aur_helper_installed():
+                    self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' not found. Attempting to install...")
+                    self.aur_helper_manager = AURHelperManager(logger=self.logger)
+                    if self.aur_helper_manager.install_aur_helper():
+                        self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' installed successfully.")
+                    else:
+                        self.logger.error(f"Failed to install AUR helper '{self.package_manager.aur_helper}'.")
+        elif os_type in ["debian", "ubuntu"]:
+            self.package_manager = AptPackageManager(logger=self.logger)
+        # ... Add more OS type checks and corresponding package manager initializations
+        else:
+            self.logger.warning(f"Unsupported operating system: {os_type}. Package management features will be limited.")
+
+    def _get_installed_packages(self) -> Dict[str, List[str]]:
+        """
+        Retrieves the list of installed packages for different package managers.
+
+        Returns:
+            Dict[str, List[str]]: Installed packages categorized by package manager.
+        """
+        installed_packages: Dict[str, List[str]] = {}
+        try:
+            # Example for Pacman
+            if isinstance(self.package_manager, PacmanPackageManager):
+                result = subprocess.run(['pacman', '-Qq'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    installed_packages['pacman'] = result.stdout.strip().split('\n')
+
+            # Example for AUR helper
+            if self.aur_helper_manager and shutil.which(self.aur_helper_manager.helper_name):
+                result = subprocess.run([self.aur_helper_manager.helper_name, '-Qq'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    installed_packages['aur'] = result.stdout.strip().split('\n')
+
+            # Example for Apt
+            if isinstance(self.package_manager, AptPackageManager):
+                result = subprocess.run(['dpkg-query', '-f', '${binary:Package}\n', '-W'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    installed_packages['apt'] = result.stdout.strip().split('\n')
+
+            # Add other package managers as needed
+            return installed_packages
+        except subprocess.SubprocessError as e:
+            self.logger.warning(f"Subprocess error while retrieving installed packages: {e}")
+            return installed_packages
+        except Exception as e:
+            self.logger.warning(f"Failed to retrieve installed packages: {e}")
+            return installed_packages
+
+    def _detect_required_packages(
+        self,
+        local_dir: Path,
+        repo_config: RepositoryConfig
+    ) -> Dict[str, Set[str]]:
+        """
+        Detect required packages based on dotfile structure and dependency map.
+
+        Args:
+            local_dir (Path): Directory to analyze.
+            repo_config (RepositoryConfig): Repository configuration.
+
+        Returns:
+            Dict[str, Set[str]]: Required packages categorized by package manager.
+        """
+        required_packages: Dict[str, Set[str]] = {
+            'pacman': {'base-devel', 'git', 'curl', 'wget'},  # Base packages
+            'aur': set(),
+            'apt': set()
+        }
+
+        # Load dependency map
+        dependency_map = self.dependency_map
+        if not dependency_map:
+            self.logger.warning("Dependency map is empty.")
+            return required_packages
+
+        # Scan directory structure and map to packages
+        for item in local_dir.iterdir():
+            if item.name in dependency_map:
+                package = dependency_map[item.name]
+                if isinstance(package, str):
+                    required_packages['pacman'].add(package)
+                    self.logger.info(f"Detected {item.name} configuration, adding package {package}")
+                elif isinstance(package, list):
+                    required_packages['pacman'].update(package)
+                    self.logger.info(f"Detected {item.name} configurations, adding packages {', '.join(package)}")
+
+            # Special handling for .oh-my-zsh plugins
+            if item.name == '.oh-my-zsh':
+                plugins_dir = item / 'plugins'
+                if plugins_dir.exists():
+                    for plugin in plugins_dir.iterdir():
+                        if plugin.name in dependency_map:
+                            package = dependency_map[plugin.name]
+                            required_packages['pacman'].add(package)
+                            self.logger.info(f"Detected zsh plugin {plugin.name}, adding package {package}")
+
+        # Add font packages if GUI components are present
+        gui_components = ['gtk-3.0', 'gtk-4.0', 'i3', 'polybar', 'kitty']
+        for component in gui_components:
+            if (local_dir / component).exists():
+                required_packages['pacman'].update({
+                    'ttf-dejavu',
+                    'ttf-liberation',
+                    'noto-fonts'
+                })
+                required_packages['aur'].add('nerd-fonts-complete')
+                self.logger.info(f"Detected GUI component {component}, adding font packages.")
+
+        return required_packages
+
+    def manage_dotfiles(
+        self,
+        profile_name: str,
+        target_files: List[str],
+        dry_run: bool = False
+    ) -> bool:
+        """
+        Manages specific dotfiles by applying or unlinking them.
+
+        Args:
+            profile_name (str): Name of the profile to manage.
+            target_files (List[str]): List of dotfiles to manage.
+            dry_run (bool): If True, preview changes without applying.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            current_repo = self._get_current_rice()
+            if not current_repo:
+                self.logger.error("No active repository found to manage dotfiles for.")
+                return False
+
+            profile = self.config_manager.get_profile(current_repo, profile_name)
+            if not profile:
+                self.logger.error(f"Profile '{profile_name}' not found for repository '{current_repo}'.")
+                return False
+
+            if dry_run:
+                self.logger.info("Dry run enabled. Previewing changes...")
+                for file in target_files:
+                    self.logger.info(f"[Dry Run] Would manage: {file}")
+                return True
+
+            # Implement actual management logic
+            for file in target_files:
+                self.logger.info(f"Managing dotfile: {file}")
+                target_path = Path.home() / file
+                if target_path.exists() or target_path.is_symlink():
+                    self._backup_existing_config(target_path)
+
+                # Assuming copying from managed directory
+                source_path = self.managed_rices_dir / current_repo / file
+                if source_path.exists():
+                    try:
+                        if source_path.is_dir():
+                            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(source_path, target_path)
+                        self.logger.info(f"Copied {source_path} to {target_path}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to copy {source_path} to {target_path}: {e}")
+                        return False
+                else:
+                    self.logger.warning(f"Source file {source_path} does not exist. Skipping.")
+
+            self.logger.info(f"Successfully managed dotfiles for profile '{profile_name}'.")
+            return True
+        except ConfigurationError as e:
+            self.logger.error(f"Configuration error while managing dotfiles: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to manage dotfiles: {e}")
             return False
