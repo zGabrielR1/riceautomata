@@ -673,17 +673,18 @@ def setup_subparser(subparsers: argparse._SubParsersAction, command_name: str, c
         for item in arguments:
             if isinstance(item, tuple) and len(item) == 2:
                 arg_name, arg_params = item
-                # Ensure all option strings start with '-'
+                # Only validate option strings that are meant to be optional arguments
                 if isinstance(arg_name, tuple):
                     for opt in arg_name:
                         if not opt.startswith('-'):
-                            raise ValueError(f"Invalid option string '{opt}': must start with a character '-'")
+                            raise ValueError(f"Invalid option string '{opt}': optional arguments must start with '-'")
+                    subparser.add_argument(*arg_name, **arg_params)
                 else:
+                    # For single arguments, only validate if it starts with '-'
                     if arg_name.startswith('-'):
-                        pass
-                    else:
-                        raise ValueError(f"Invalid option string '{arg_name}': must start with a character '-'")
-                subparser.add_argument(*arg_name if isinstance(arg_name, tuple) else [arg_name], **arg_params)
+                        if not arg_name.startswith('-'):
+                            raise ValueError(f"Invalid option string '{arg_name}': optional arguments must start with '-'")
+                    subparser.add_argument(arg_name, **arg_params)
             else:
                 print(f"Warning: Invalid argument format for command '{command_name}': {item}. Expected a tuple of (name, params).")
 
