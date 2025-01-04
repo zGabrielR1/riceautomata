@@ -1,11 +1,11 @@
-# dotfilemanager/utils.py
+# src/utils.py
 
+import logging
+import sys
 import re
-import shutil
-import time
 from pathlib import Path
 from typing import Optional
-import logging
+import time
 
 def sanitize_path(path_str: str) -> Path:
     """
@@ -48,3 +48,33 @@ def confirm_action(prompt: str) -> bool:
             return False
         else:
             print("Please respond with 'y' or 'n'.")
+
+def sanitize_url(url: str) -> str:
+    """
+    Sanitizes a URL by removing unnecessary parts.
+
+    Args:
+        url (str): The URL to sanitize.
+
+    Returns:
+        str: Sanitized URL.
+    """
+    # Example sanitization: remove trailing slashes and unwanted query parameters
+    sanitized = re.sub(r'https?://', '', url)  # Remove http:// or https://
+    sanitized = sanitized.rstrip('/')            # Remove trailing slash
+    # Add more sanitization rules as needed
+    return sanitized
+
+def exception_handler(exc_type, exc_value, exc_traceback):
+    """
+    Global exception handler.
+
+    Args:
+        exc_type: Exception type.
+        exc_value: Exception value.
+        exc_traceback: Exception traceback.
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))

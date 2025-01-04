@@ -1,4 +1,5 @@
 # src/cli.py
+
 import argparse
 import sys
 import logging
@@ -9,7 +10,8 @@ from colorama import init, Fore, Style
 import datetime
 import shutil
 
-from .utils import setup_logger, sanitize_url, exception_handler
+from .utils import sanitize_url, exception_handler
+from .logger import setup_logger  # Updated import
 from .package_manager import PackageManager
 from .dotfile_manager import DotfileManager
 from .config import ConfigManager
@@ -701,7 +703,7 @@ Examples:
     if not args.command:
         parser.print_help()
         sys.exit(1)
-        
+
     logger = setup_logger(args.verbose)
     dotfile_manager = DotfileManager(verbose=args.verbose)
     package_manager = PackageManager(verbose=args.verbose)
