@@ -1,3 +1,5 @@
+# src/dotfile_manager.py
+
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
 import subprocess
@@ -30,7 +32,7 @@ from .exceptions import (
     BackupError,
 )
 from .utils import sanitize_path, create_timestamp, confirm_action
-from .package_manager import PackageManagerInterface, PacmanPackageManager, AptPackageManager, AURHelperManager
+from .package_manager import PackageManager
 from .os_manager import OSManager
 
 
@@ -57,8 +59,8 @@ class DotfileManager:
         self.config_manager = ConfigManager(config_path=config_path, logger=self.logger)
         self.backup_manager = BackupManager(logger=self.logger)
         self.os_manager = OSManager(logger=self.logger)
-        self.package_manager: Optional[PackageManagerInterface] = None
-        self.aur_helper_manager: Optional[AURHelperManager] = None
+        self.package_manager = PackageManager(logger=self.logger)
+        self.aur_helper_manager = self.package_manager.aur_helper_manager
         self.script_runner = ScriptRunner(logger=self.logger)
         self.template_handler = TemplateHandler(logger=self.logger)
         self.file_ops = FileOperations(self.backup_manager, logger=self.logger)
@@ -68,7 +70,6 @@ class DotfileManager:
         self.retry_delay = 2  # seconds
         self.managed_rices_dir = sanitize_path("~/.config/managed-rices")
         self._ensure_managed_dir()
-        self._initialize_package_manager()
 
     def _install_packages(self, packages: Dict[str, Set[str]]) -> bool:
         """
@@ -82,12 +83,7 @@ class DotfileManager:
         """
         try:
             # Update package databases if necessary
-            package_manager_name = self.os_manager.get_package_manager()
-            if not package_manager_name:
-                self.logger.error("No supported package manager found.")
-                return False
-
-            if 'pacman' in packages and isinstance(self.package_manager, PacmanPackageManager):
+            if 'pacman' in packages and isinstance(self.package_manager.manager, PacmanPackageManager):
                 pacman_packages = list(packages['pacman'])
                 if pacman_packages:
                     self.logger.info(f"Installing pacman packages: {', '.join(pacman_packages)}")
@@ -101,6 +97,14 @@ class DotfileManager:
                     self.logger.info(f"Installing AUR packages: {', '.join(aur_packages)}")
                     if not self.aur_helper_manager.install_packages(aur_packages):
                         self.logger.error("Failed to install AUR packages.")
+                        return False
+
+            if 'apt' in packages and isinstance(self.package_manager.manager, AptPackageManager):
+                apt_packages = list(packages['apt'])
+                if apt_packages:
+                    self.logger.info(f"Installing apt packages: {', '.join(apt_packages)}")
+                    if not self.package_manager.install_packages(apt_packages):
+                        self.logger.error("Failed to install apt packages.")
                         return False
 
             return True
@@ -579,13 +583,13 @@ class DotfileManager:
             self.logger.error(f"File not found error: {e}")
             return False
         except Exception as e:
-            self.logger.error(f"An unexpected error occurred: {e}")
+            self.logger.error(f"Failed to manage dotfiles: {e}")
             return False
 
     def _install_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> bool:
         """Detects and installs required packages."""
         required_packages = self._detect_required_packages(local_dir, repo_config)
-        if required_packages and (required_packages.get('pacman') or required_packages.get('aur')):
+        if required_packages and (required_packages.get('pacman') or required_packages.get('aur') or required_packages.get('apt')):
             self.logger.info("Installing required packages for the rice configuration...")
             if not self._install_packages(required_packages):
                 self.logger.error("Failed to install required packages")
@@ -864,186 +868,6 @@ class DotfileManager:
             self.logger.error(f"Failed to delete snapshot '{name}': {e}")
             return False
 
-    def _initialize_package_manager(self) -> None:
-        """
-        Initializes the appropriate package manager based on the OS.
-        """
-        os_type = self.os_manager.get_os_type()
-        if os_type == "arch":
-            self.package_manager = PacmanPackageManager(logger=self.logger)
-            if isinstance(self.package_manager, PacmanPackageManager):
-                if not self.package_manager.is_aur_helper_installed():
-                    self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' not found. Attempting to install...")
-                    self.aur_helper_manager = AURHelperManager(logger=self.logger)
-                    if self.aur_helper_manager.install_aur_helper():
-                        self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' installed successfully.")
-                    else:
-                        self.logger.error(f"Failed to install AUR helper '{self.package_manager.aur_helper}'.")
-        elif os_type in ["debian", "ubuntu"]:
-            self.package_manager = AptPackageManager(logger=self.logger)
-        # ... Add more OS type checks and corresponding package manager initializations
-        else:
-            self.logger.warning(f"Unsupported operating system: {os_type}. Package management features will be limited.")
-
-    def _get_installed_packages(self) -> Dict[str, List[str]]:
-        """
-        Retrieves the list of installed packages for different package managers.
-
-        Returns:
-            Dict[str, List[str]]: Installed packages categorized by package manager.
-        """
-        installed_packages: Dict[str, List[str]] = {}
-        try:
-            # Example for Pacman
-            if isinstance(self.package_manager, PacmanPackageManager):
-                result = subprocess.run(['pacman', '-Qq'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    installed_packages['pacman'] = result.stdout.strip().split('\n')
-
-            # Example for AUR helper
-            if self.aur_helper_manager and shutil.which(self.aur_helper_manager.helper_name):
-                result = subprocess.run([self.aur_helper_manager.helper_name, '-Qq'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    installed_packages['aur'] = result.stdout.strip().split('\n')
-
-            # Example for Apt
-            if isinstance(self.package_manager, AptPackageManager):
-                result = subprocess.run(['dpkg-query', '-f', '${binary:Package}\n', '-W'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    installed_packages['apt'] = result.stdout.strip().split('\n')
-
-            # Add other package managers as needed
-            return installed_packages
-        except subprocess.SubprocessError as e:
-            self.logger.warning(f"Subprocess error while retrieving installed packages: {e}")
-            return installed_packages
-        except Exception as e:
-            self.logger.warning(f"Failed to retrieve installed packages: {e}")
-            return installed_packages
-
-    def _detect_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> Dict[str, Set[str]]:
-        """
-        Detect required packages based on dotfile structure and dependency map.
-
-        Args:
-            local_dir (Path): Directory to analyze.
-            repo_config (RepositoryConfig): Repository configuration.
-
-        Returns:
-            Dict[str, Set[str]]: Required packages categorized by package manager.
-        """
-        required_packages: Dict[str, Set[str]] = {
-            'pacman': {'base-devel', 'git', 'curl', 'wget'},  # Base packages
-            'aur': set(),
-            'apt': set()
-        }
-
-        # Load dependency map
-        dependency_map = self.dependency_map
-        if not dependency_map:
-            self.logger.warning("Dependency map is empty.")
-            return required_packages
-
-        # Scan directory structure and map to packages
-        for item in local_dir.iterdir():
-            if item.name in dependency_map:
-                package = dependency_map[item.name]
-                if isinstance(package, str):
-                    required_packages['pacman'].add(package)
-                    self.logger.info(f"Detected {item.name} configuration, adding package {package}")
-                elif isinstance(package, list):
-                    required_packages['pacman'].update(package)
-                    self.logger.info(f"Detected {item.name} configurations, adding packages {', '.join(package)}")
-
-            # Special handling for .oh-my-zsh plugins
-            if item.name == '.oh-my-zsh':
-                plugins_dir = item / 'plugins'
-                if plugins_dir.exists():
-                    for plugin in plugins_dir.iterdir():
-                        if plugin.name in dependency_map:
-                            package = dependency_map[plugin.name]
-                            required_packages['pacman'].add(package)
-                            self.logger.info(f"Detected zsh plugin {plugin.name}, adding package {package}")
-
-        # Add font packages if GUI components are present
-        gui_components = ['gtk-3.0', 'gtk-4.0', 'i3', 'polybar', 'kitty']
-        for component in gui_components:
-            if (local_dir / component).exists():
-                required_packages['pacman'].update({
-                    'ttf-dejavu',
-                    'ttf-liberation',
-                    'noto-fonts'
-                })
-                required_packages['aur'].add('nerd-fonts-complete')
-                self.logger.info(f"Detected GUI component {component}, adding font packages.")
-
-        return required_packages
-
-    def manage_dotfiles(
-        self,
-        profile_name: str,
-        target_files: List[str],
-        dry_run: bool = False
-    ) -> bool:
-        """
-        Manages specific dotfiles by applying or unlinking them.
-
-        Args:
-            profile_name (str): Name of the profile to manage.
-            target_files (List[str]): List of dotfiles to manage.
-            dry_run (bool): If True, preview changes without applying.
-
-        Returns:
-            bool: True if successful, False otherwise.
-        """
-        try:
-            current_repo = self._get_current_rice()
-            if not current_repo:
-                self.logger.error("No active repository found to manage dotfiles for.")
-                return False
-
-            profile = self.config_manager.get_profile(current_repo, profile_name)
-            if not profile:
-                self.logger.error(f"Profile '{profile_name}' not found for repository '{current_repo}'.")
-                return False
-
-            if dry_run:
-                self.logger.info("Dry run enabled. Previewing changes...")
-                for file in target_files:
-                    self.logger.info(f"[Dry Run] Would manage: {file}")
-                return True
-
-            # Implement actual management logic
-            for file in target_files:
-                self.logger.info(f"Managing dotfile: {file}")
-                target_path = Path.home() / file
-                if target_path.exists() or target_path.is_symlink():
-                    self._backup_existing_config(target_path)
-
-                # Assuming copying from managed directory
-                source_path = self.managed_rices_dir / current_repo / file
-                if source_path.exists():
-                    try:
-                        if source_path.is_dir():
-                            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
-                        else:
-                            shutil.copy2(source_path, target_path)
-                        self.logger.info(f"Copied {source_path} to {target_path}")
-                    except Exception as e:
-                        self.logger.error(f"Failed to copy {source_path} to {target_path}: {e}")
-                        return False
-                else:
-                    self.logger.warning(f"Source file {source_path} does not exist. Skipping.")
-
-            self.logger.info(f"Successfully managed dotfiles for profile '{profile_name}'.")
-            return True
-        except ConfigurationError as e:
-            self.logger.error(f"Configuration error while managing dotfiles: {e}")
-            return False
-        except Exception as e:
-            self.logger.error(f"Failed to manage dotfiles: {e}")
-            return False
-
     def _get_current_rice(self) -> Optional[str]:
         """
         Retrieves the currently applied rice.
@@ -1281,27 +1105,6 @@ class DotfileManager:
             self.logger.error(f"Failed to restore backup '{backup_name}' for repository '{repository_name}': {e}")
             return False
 
-    def _initialize_package_manager(self) -> None:
-        """
-        Initializes the appropriate package manager based on the OS.
-        """
-        os_type = self.os_manager.get_os_type()
-        if os_type == "arch":
-            self.package_manager = PacmanPackageManager(logger=self.logger)
-            if isinstance(self.package_manager, PacmanPackageManager):
-                if not self.package_manager.is_aur_helper_installed():
-                    self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' not found. Attempting to install...")
-                    self.aur_helper_manager = AURHelperManager(logger=self.logger)
-                    if self.aur_helper_manager.install_aur_helper():
-                        self.logger.info(f"AUR helper '{self.package_manager.aur_helper}' installed successfully.")
-                    else:
-                        self.logger.error(f"Failed to install AUR helper '{self.package_manager.aur_helper}'.")
-        elif os_type in ["debian", "ubuntu"]:
-            self.package_manager = AptPackageManager(logger=self.logger)
-        # ... Add more OS type checks and corresponding package manager initializations
-        else:
-            self.logger.warning(f"Unsupported operating system: {os_type}. Package management features will be limited.")
-
     def _get_installed_packages(self) -> Dict[str, List[str]]:
         """
         Retrieves the list of installed packages for different package managers.
@@ -1312,7 +1115,7 @@ class DotfileManager:
         installed_packages: Dict[str, List[str]] = {}
         try:
             # Example for Pacman
-            if isinstance(self.package_manager, PacmanPackageManager):
+            if isinstance(self.package_manager.manager, PacmanPackageManager):
                 result = subprocess.run(['pacman', '-Qq'], capture_output=True, text=True)
                 if result.returncode == 0:
                     installed_packages['pacman'] = result.stdout.strip().split('\n')
@@ -1324,7 +1127,7 @@ class DotfileManager:
                     installed_packages['aur'] = result.stdout.strip().split('\n')
 
             # Example for Apt
-            if isinstance(self.package_manager, AptPackageManager):
+            if isinstance(self.package_manager.manager, AptPackageManager):
                 result = subprocess.run(['dpkg-query', '-f', '${binary:Package}\n', '-W'], capture_output=True, text=True)
                 if result.returncode == 0:
                     installed_packages['apt'] = result.stdout.strip().split('\n')

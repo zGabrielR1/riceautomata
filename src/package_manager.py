@@ -1,69 +1,36 @@
 # src/package_manager.py
-import subprocess
-from typing import List, Optional, Dict
+
+import platform
+from typing import List, Optional
 import logging
 import shutil
-import os
-from abc import ABC, abstractmethod
 
 from .exceptions import PackageManagerError
 
-class PackageManagerInterface(ABC):
+
+class PackageManagerInterface:
     """
     Interface for package managers.
     """
     def __init__(self, logger: Optional[logging.Logger] = None):
-        self.logger = logger or logging.getLogger('DotfileManager')
+        self.logger = logger or logging.getLogger('PackageManager')
 
-    @abstractmethod
     def is_available(self) -> bool:
         """Checks if the package manager is available on the system."""
-        pass
+        raise NotImplementedError
 
-    @abstractmethod
     def is_installed(self, package: str) -> bool:
         """Checks if a package is installed."""
-        pass
+        raise NotImplementedError
 
-    @abstractmethod
     def install_packages(self, packages: List[str]) -> bool:
         """Installs a list of packages."""
-        pass
+        raise NotImplementedError
 
     def update_db(self) -> bool:
-        """Updates the package manager's database (if applicable)."""
-        return True  # Default behavior is to do nothing
+        """Updates the package manager's database."""
+        raise NotImplementedError
 
-    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
-        """
-        Runs a command and handles errors.
-
-        Args:
-            command (List[str]): The command to execute.
-            check (bool): Whether to raise an exception on non-zero exit codes.
-            capture_output (bool): Whether to capture the command's output.
-
-        Returns:
-            subprocess.CompletedProcess: The result of the executed command.
-        """
-        try:
-            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
-            if result.returncode != 0:
-                self.logger.error(f"Error executing command: {' '.join(command)}")
-                if result.stderr:
-                    self.logger.error(f"Error output: {result.stderr}")
-                if check:
-                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
-            return result
-        except FileNotFoundError:
-            self.logger.error(f"Command not found: {command[0]}")
-            raise PackageManagerError(f"Command not found: {command[0]}")
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
-            raise PackageManagerError(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
-        except Exception as e:
-            self.logger.error(f"An unexpected error occurred: {e}")
-            raise PackageManagerError(f"An unexpected error occurred: {e}")
 
 class PacmanPackageManager(PackageManagerInterface):
     """
@@ -119,6 +86,39 @@ class PacmanPackageManager(PackageManagerInterface):
             self.logger.error(f"Failed to update Pacman package database: {e}")
             return False
 
+    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+        """
+        Runs a command and handles errors.
+
+        Args:
+            command (List[str]): The command to execute.
+            check (bool): Whether to raise an exception on non-zero exit codes.
+            capture_output (bool): Whether to capture the command's output.
+
+        Returns:
+            subprocess.CompletedProcess: The result of the executed command.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            if result.returncode != 0:
+                self.logger.error(f"Error executing command: {' '.join(command)}")
+                if result.stderr:
+                    self.logger.error(f"Error output: {result.stderr}")
+                if check:
+                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+            return result
+        except FileNotFoundError:
+            self.logger.error(f"Command not found: {command[0]}")
+            raise PackageManagerError(f"Command not found: {command[0]}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+            raise PackageManagerError(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred: {e}")
+            raise PackageManagerError(f"An unexpected error occurred: {e}")
+
+
 class AptPackageManager(PackageManagerInterface):
     """
     Implementation of PackageManagerInterface for APT.
@@ -169,6 +169,39 @@ class AptPackageManager(PackageManagerInterface):
             self.logger.error(f"Failed to update APT package database: {e}")
             return False
 
+    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+        """
+        Runs a command and handles errors.
+
+        Args:
+            command (List[str]): The command to execute.
+            check (bool): Whether to raise an exception on non-zero exit codes.
+            capture_output (bool): Whether to capture the command's output.
+
+        Returns:
+            subprocess.CompletedProcess: The result of the executed command.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            if result.returncode != 0:
+                self.logger.error(f"Error executing command: {' '.join(command)}")
+                if result.stderr:
+                    self.logger.error(f"Error output: {result.stderr}")
+                if check:
+                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+            return result
+        except FileNotFoundError:
+            self.logger.error(f"Command not found: {command[0]}")
+            raise PackageManagerError(f"Command not found: {command[0]}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+            raise PackageManagerError(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred: {e}")
+            raise PackageManagerError(f"An unexpected error occurred: {e}")
+
+
 class AURHelperManager(PackageManagerInterface):
     """
     Manager for AUR (Arch User Repository) helpers like 'yay'.
@@ -218,11 +251,14 @@ class AURHelperManager(PackageManagerInterface):
         """
         self.logger.info(f"Attempting to install AUR helper '{self.helper_name}'...")
         try:
-            temp_dir = "/tmp"  # Temporary directory for installation
-            clone_dir = os.path.join(temp_dir, f"{self.helper_name}-git")
+            import subprocess
+            import tempfile
+
+            temp_dir = tempfile.gettempdir()
+            clone_dir = shutil.os.path.join(temp_dir, f"{self.helper_name}-git")
 
             # Clean up any previous failed installation attempts
-            if os.path.exists(clone_dir):
+            if shutil.os.path.exists(clone_dir):
                 shutil.rmtree(clone_dir)
                 self.logger.debug(f"Removed existing directory '{clone_dir}' for AUR helper installation.")
 
@@ -231,6 +267,7 @@ class AURHelperManager(PackageManagerInterface):
 
             # Build and install the AUR helper
             self._run_command(["makepkg", "-si", "--noconfirm"], cwd=clone_dir)
+
             self.logger.info(f"Successfully installed AUR helper '{self.helper_name}'.")
             return True
         except PackageManagerError as e:
@@ -238,7 +275,7 @@ class AURHelperManager(PackageManagerInterface):
             return False
         finally:
             # Clean up the cloned directory
-            if os.path.exists(clone_dir):
+            if shutil.os.path.exists(clone_dir):
                 shutil.rmtree(clone_dir)
                 self.logger.debug(f"Cleaned up cloned directory '{clone_dir}' after AUR helper installation.")
 
@@ -250,7 +287,146 @@ class AURHelperManager(PackageManagerInterface):
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Example: Some AUR helpers might have an update command
-        # Adjust based on the specific helper's capabilities
         self.logger.debug(f"No database update required for AUR helper '{self.helper_name}'.")
         return True
+
+    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+        """
+        Runs a command and handles errors.
+
+        Args:
+            command (List[str]): The command to execute.
+            check (bool): Whether to raise an exception on non-zero exit codes.
+            capture_output (bool): Whether to capture the command's output.
+
+        Returns:
+            subprocess.CompletedProcess: The result of the executed command.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            if result.returncode != 0:
+                self.logger.error(f"Error executing command: {' '.join(command)}")
+                if result.stderr:
+                    self.logger.error(f"Error output: {result.stderr}")
+                if check:
+                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+            return result
+        except FileNotFoundError:
+            self.logger.error(f"Command not found: {command[0]}")
+            raise PackageManagerError(f"Command not found: {command[0]}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+            raise PackageManagerError(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred: {e}")
+            raise PackageManagerError(f"An unexpected error occurred: {e}")
+
+
+class PackageManager(PackageManagerInterface):
+    """
+    Facade for managing different package managers based on the operating system.
+    """
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        super().__init__(logger)
+        self.manager: Optional[PackageManagerInterface] = None
+        self.aur_helper_manager: Optional[AURHelperManager] = None
+        self._initialize_manager()
+
+    def _initialize_manager(self):
+        """
+        Initializes the appropriate package manager based on the OS.
+        """
+        os_type = self.detect_os_type()
+        self.logger.debug(f"Detected OS type: {os_type}")
+
+        if os_type == "arch":
+            self.manager = PacmanPackageManager(logger=self.logger)
+            # Initialize AUR Helper Manager if necessary
+            self.aur_helper_manager = AURHelperManager(logger=self.logger)
+            if not self.aur_helper_manager.is_available():
+                self.logger.info("AUR helper not found. Attempting to install...")
+                if not self.aur_helper_manager.install_aur_helper():
+                    self.logger.error("Failed to install AUR helper.")
+        elif os_type in ["debian", "ubuntu"]:
+            self.manager = AptPackageManager(logger=self.logger)
+        else:
+            self.logger.error(f"Unsupported operating system: {os_type}")
+            raise PackageManagerError(f"Unsupported operating system: {os_type}")
+
+    def detect_os_type(self) -> str:
+        """
+        Detects the operating system type.
+
+        Returns:
+            str: The OS type (e.g., 'arch', 'debian', 'ubuntu', etc.).
+        """
+        system = platform.system().lower()
+        if system == "linux":
+            try:
+                import distro
+                distro_name = distro.id().lower()
+                if "arch" in distro_name:
+                    return "arch"
+                elif "debian" in distro_name or "ubuntu" in distro_name:
+                    return "debian"
+                # Add more distributions as needed
+            except ImportError:
+                self.logger.warning("The 'distro' package is not installed. Defaulting to 'unknown'.")
+                return "unknown"
+        elif system == "darwin":
+            return "macos"
+        elif system == "windows":
+            return "windows"
+        return "unknown"
+
+    def is_available(self) -> bool:
+        """
+        Checks if the selected package manager is available.
+
+        Returns:
+            bool: True if available, False otherwise.
+        """
+        if self.manager:
+            return self.manager.is_available()
+        return False
+
+    def is_installed(self, package: str) -> bool:
+        """
+        Checks if a package is installed using the selected package manager.
+
+        Args:
+            package (str): The package name.
+
+        Returns:
+            bool: True if installed, False otherwise.
+        """
+        if self.manager:
+            return self.manager.is_installed(package)
+        return False
+
+    def install_packages(self, packages: List[str]) -> bool:
+        """
+        Installs packages using the selected package manager.
+
+        Args:
+            packages (List[str]): List of package names to install.
+
+        Returns:
+            bool: True if installation was successful, False otherwise.
+        """
+        if self.manager:
+            return self.manager.install_packages(packages)
+        return False
+
+    def update_db(self) -> bool:
+        """
+        Updates the package manager's database.
+
+        Returns:
+            bool: True if the update was successful, False otherwise.
+        """
+        if self.manager:
+            return self.manager.update_db()
+        return False
