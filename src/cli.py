@@ -495,7 +495,7 @@ COMMANDS = {
     },
     "apply": {
         "help": "Apply dotfiles from a repository",
-        "aliases": ["A"],  # ✅ Corrected: Removed hyphen from alias
+        "aliases": ["A"],
         "arguments": [
             ("repository_name", {"help": "Name of the repository to apply"}),
             (("-p", "--profile"), {"help": "Profile to use"}),
@@ -508,6 +508,7 @@ COMMANDS = {
             ("--templates", {"action": "store_true", "help": "Process template files"}),
             ("--custom-paths", {"help": "Comma-separated list of custom paths"}),
             ("--ignore-rules", {"action": "store_true", "help": "Ignore discovery rules"}),
+            (("--overwrite-symlink",), {"help": "Overwrite existing symlinks", "action": "store_true"}),
         ],
         "handler": handle_apply,
     },

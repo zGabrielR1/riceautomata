@@ -466,132 +466,98 @@ class DotfileManager:
                 raise FileOperationError(f"Failed to backup {target_path}: {e}")
         return None
 
-    def _stow_item(self, local_dir: Path, item_name: str, stow_options: List[str]) -> bool:
-        """Applies a single item using GNU Stow."""
-        stow_cmd = ['stow', '-v'] + stow_options + [item_name]
-        try:
-            self.logger.info(f"Stowing {item_name} to ~/.config/")
-            subprocess.run(stow_cmd, check=True, cwd=str(local_dir))
-            self.logger.debug(f"Successfully stowed {item_name}")
-            return True
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Failed to stow {item_name}: {e}")
+def _stow_item(self, source_dir: Path, item_name: str, stow_options: List[str], overwrite_symlink: bool = False) -> bool:
+    """
+    Stow a single item with the given options.
+    
+    Args:
+        source_dir (Path): Source directory containing the item
+        item_name (str): Name of the item to stow
+        stow_options (List[str]): Additional stow options
+        overwrite_symlink (bool): Whether to overwrite existing symlinks
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        cmd = ['stow']
+        if overwrite_symlink:
+            cmd.extend(['--override=.*', '--adopt'])
+        cmd.extend(stow_options)
+        cmd.extend(['-t', str(Path.home()), '-d', str(source_dir), item_name])
+        
+        self.logger.info(f"Running stow command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            self.logger.error(f"Stow failed: {result.stderr}")
             return False
-        except FileNotFoundError:
-            self.logger.error("GNU Stow is not installed or not found in PATH.")
-            return False
+            
+        return True
+    except Exception as e:
+        self.logger.error(f"Error during stow operation: {e}")
+        return False
 
-    def apply_dotfiles(
-        self,
-        repository_name: str,
-        stow_options: Optional[List[str]] = None,
-        package_manager: Optional[PackageManagerInterface] = None,
-        target_packages: Optional[List[str]] = None,
-        overwrite_symlink: Optional[str] = None,
-        custom_paths: Optional[Dict[str, str]] = None,
-        ignore_rules: bool = False,
-        template_context: Dict[str, Any] = {},
-        discover_templates: bool = False,
-        custom_scripts: Optional[List[str]] = None
-    ) -> bool:
-        """
-        Applies dotfiles from a repository using GNU Stow.
+def handle_apply(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger) -> None:
+    """Handles the 'apply' command."""
+    try:
+        if args.auto:
+            logger.info(f"Starting automated installation for repository: {args.repository_name}")
+            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
+            if not config:
+                logger.error(f"No configuration found for repository: {args.repository_name}")
+                sys.exit(1)
 
-        Args:
-            repository_name (str): Name of the repository.
-            stow_options (Optional[List[str]]): Additional options for stow.
-            package_manager (Optional[PackageManagerInterface]): Package manager instance.
-            target_packages (Optional[List[str]]): List of target packages.
-            overwrite_symlink (Optional[str]): Path to overwrite existing symlinks.
-            custom_paths (Optional[Dict[str, str]]): Custom paths for extra directories.
-            ignore_rules (bool): Whether to ignore rules during application.
-            template_context (Dict[str, Any]): Context for template rendering.
-            discover_templates (bool): Whether to discover and process templates.
-            custom_scripts (Optional[List[str]]): Additional scripts to run.
+            local_dir = config.get('local_directory')
+            if not local_dir:
+                logger.error("Local directory not found in configuration")
+                sys.exit(1)
 
-        Returns:
-            bool: True if successful, False otherwise.
-        """
-        try:
-            rice_config = self.config_manager.get_rice_config(repository_name)
-            if not rice_config:
-                raise ConfigurationError(f"No configuration found for repository: {repository_name}")
-
-            local_dir = Path(rice_config["local_directory"])
-            config_home = Path.home() / ".config"
-            config_home.mkdir(parents=True, exist_ok=True)
-
-            # Load repository-specific configuration (rice.json)
-            repo_config = self.config_manager.get_repository_config(local_dir)
-            if not repo_config:
-                self.logger.warning(f"No 'rice.json' found for repository '{repository_name}'. Using default behavior.")
-                repo_config = RepositoryConfig()  # Use an empty configuration as a fallback
-
-            # 1. Install required packages
-            if not self._install_required_packages(local_dir, repo_config):
-                return False
-
-            # 2. Discover dotfile directories
-            dotfile_dirs = self._discover_dotfile_directories(
+            # Apply automated installation with options
+            success = dotfile_manager.apply_rice_automated(
                 local_dir,
-                repo_config=repo_config,
-                target_packages=target_packages,
-                custom_paths=custom_paths,
-                ignore_rules=ignore_rules
+                skip_backup=args.no_backup,
+                force=args.force,
+                skip_verify=args.skip_verify
             )
 
-            # 3. Backup existing configurations
-            self._backup_existing_configs(config_home, dotfile_dirs)
+            if not success:
+                logger.error("Automated installation failed")
+                sys.exit(1)
 
-            # 4. Apply dotfiles using Stow
-            for item_name, item_category in dotfile_dirs.items():
-                item_path = Path(item_name)
-                # a. Backup existing config if category is 'config'
-                if item_category == "config":
-                    target_path = config_home / item_path.name
-                    self._backup_existing_config(target_path)
+            logger.info("Automated installation completed successfully")
 
-                # b. Stow item
-                if not self._stow_item(local_dir, item_path.name, stow_options or []):
-                    return False
+        else:
+            # Get target packages if specified
+            target_packages = args.target_packages.split(',') if args.target_packages else None
+            
+            # Get custom paths if specified
+            custom_paths = dict(p.split('=') for p in args.custom_paths.split(',')) if args.custom_paths else None
 
-                # c. Record the applied item in config
-                rice_config["dotfile_directories"][str(item_path)] = item_category
-                rice_config["profiles"]["default"].setdefault('configs', []).append(
-                    {
-                        "name": item_path.name,
-                        "path": str(config_home / item_path.name),
-                        "type": item_category,
-                        "applied_at": create_timestamp(),
-                    }
-                )
+            # Get stow options if specified
+            stow_options = args.stow_options.split(' ') if args.stow_options else None
 
-            # 5. Handle templates
-            if discover_templates:
-                if not self._handle_templates(local_dir, template_context):
-                    return False
+            # Apply dotfiles with all parameters
+            success = dotfile_manager.apply_dotfiles(
+                repository_name=args.repository_name,
+                stow_options=stow_options,
+                package_manager=package_manager,
+                target_packages=target_packages,
+                overwrite_symlink=args.overwrite_symlink,
+                custom_paths=custom_paths,
+                ignore_rules=args.ignore_rules,
+                template_context={},  # You might want to add support for template context via CLI
+                discover_templates=args.templates,
+                custom_scripts=None  # You might want to add support for custom scripts via CLI
+            )
 
-            # 6. Run custom scripts
-            if custom_scripts:
-                if not self._run_custom_scripts(local_dir, custom_scripts):
-                    return False
+            if not success:
+                logger.error("Failed to apply dotfiles")
+                sys.exit(1)
 
-            # 7. Update rice config
-            self._update_rice_config(repository_name, rice_config)
-            return True
-
-        except ConfigurationError as e:
-            self.logger.error(f"Configuration error: {e}")
-            return False
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Subprocess error: {e}")
-            return False
-        except FileNotFoundError as e:
-            self.logger.error(f"File not found error: {e}")
-            return False
-        except Exception as e:
-            self.logger.error(f"Failed to manage dotfiles: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"An error occurred in command: {args.command}. Error: {e}")
+        sys.exit(1)
 
     def _install_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> bool:
         """Detects and installs required packages."""
