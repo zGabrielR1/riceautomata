@@ -666,8 +666,14 @@ def setup_subparser(subparsers: argparse._SubParsersAction, command_name: str, c
     subparser = subparsers.add_parser(command_name, 
                                       aliases=command_data.get("aliases", []), 
                                       help=command_data["help"])
-    for arg_name, arg_params in command_data.get("arguments", []):
-        subparser.add_argument(arg_name, **arg_params)
+    arguments = command_data.get("arguments", [])
+    if arguments:
+        for item in arguments:
+            if isinstance(item, tuple) and len(item) == 2:
+                arg_name, arg_params = item
+                subparser.add_argument(*arg_name if isinstance(arg_name, tuple) else arg_name, **arg_params)
+            else:
+                print(f"Warning: Invalid argument format for command '{command_name}': {item}. Expected a tuple of (name, params).")
 
     # Recursively set up subparsers for subcommands
     if "subcommands" in command_data:
@@ -676,7 +682,7 @@ def setup_subparser(subparsers: argparse._SubParsersAction, command_name: str, c
             setup_subparser(subsubparsers, sub_name, sub_data)
             
     subparser.set_defaults(handler=lambda args, dotfile_manager, package_manager, logger: command_data["handler"](args, dotfile_manager, package_manager, logger) if "handler" in command_data else None)
-
+    
 def main():
     """Main entry point for the CLI."""
     sys.excepthook = exception_handler
