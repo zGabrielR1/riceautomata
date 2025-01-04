@@ -486,20 +486,22 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
 
 # Command definitions
 COMMANDS = {
-    "clone": {
-        "help": "Clone a dotfiles repository",
+    "search": {
+        "help": "Search for configurations or settings",
         "arguments": [
-            ("repository_url", {"help": "URL of the repository to clone"}),
+            ("query", {"help": "Search query"}),
+            (("-r", "--repository"), {"help": "Limit search to specific repository"}),
+            ("--content", {"action": "store_true", "help": "Search in file contents"}),
         ],
-        "handler": handle_clone,
+        "handler": handle_search,
     },
     "apply": {
         "help": "Apply dotfiles from a repository",
         "aliases": ["-A"],
         "arguments": [
             ("repository_name", {"help": "Name of the repository to apply"}),
-            ("-p", "--profile", {"help": "Profile to use"}),
-            ("-t", "--target-packages", {"help": "Comma-separated list of packages to configure"}),
+            (("-p", "--profile"), {"help": "Profile to use"}),
+            (("-t", "--target-packages"), {"help": "Comma-separated list of packages to configure"}),
             ("--auto", {"action": "store_true", "help": "Enable fully automated installation with enhanced detection"}),
             ("--no-backup", {"action": "store_true", "help": "Skip creating backup of existing configuration"}),
             ("--force", {"action": "store_true", "help": "Force installation even if validation fails"}),
@@ -507,7 +509,7 @@ COMMANDS = {
             ("--stow-options", {"help": "Space-separated GNU Stow options"}),
             ("--templates", {"action": "store_true", "help": "Process template files"}),
             ("--custom-paths", {"help": "Comma-separated list of custom paths"}),
-            ("--ignore-rules", {"action": "store_true", "help": "Ignore discovery rules"})
+            ("--ignore-rules", {"action": "store_true", "help": "Ignore discovery rules"}),
         ],
         "handler": handle_apply,
     },
