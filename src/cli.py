@@ -725,7 +725,7 @@ Examples:
 
     logger = setup_logger(args.verbose)
     dotfile_manager = DotfileManager(verbose=args.verbose)
-    package_manager = PackageManager(verbose=args.verbose)
+    package_manager = PackageManager()  # Removed verbose parameter
 
     try:
         # Handle top-level commands and subcommands
