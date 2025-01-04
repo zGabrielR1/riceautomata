@@ -3,7 +3,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Dict, Set, Any
+from typing import Any, Dict, Optional, Set
 import logging
 import toml
 import yaml
@@ -35,7 +35,6 @@ class DotfileAnalyzer:
         self.logger = logger or logging.getLogger('DotfileManager')
         # Precompile regex patterns
         self.package_regex = re.compile(r'[\w-]+(?:>=?[\d.]+)?')
-
     def build_tree(self, root_path: Path) -> DotfileNode:
         """
         Builds a tree structure of the dotfiles directory.
