@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List  # Added List here
 import logging
 from .exceptions import BackupError
 from .utils import create_timestamp
@@ -27,6 +27,7 @@ class BackupManager:
         """Creates the backup directory if it doesn't exist."""
         try:
             self.backup_base_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.debug(f"Ensured backup directory exists at {self.backup_base_dir}")
         except OSError as e:
             self.logger.error(f"Failed to create backup directory: {e}")
             raise BackupError(f"Failed to create backup directory: {e}")
