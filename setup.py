@@ -14,7 +14,8 @@ setup(
         "aiofiles>=23.2.1",
         "asyncio>=3.4.3",
         "typing-extensions>=4.7.1",
-        "rich>=13.5.2"
+        "rich>=13.5.2",
+        "distro"
     ],
     entry_points={
         'console_scripts': [

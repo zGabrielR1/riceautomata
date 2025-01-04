@@ -4,6 +4,7 @@ import platform
 from typing import List, Optional
 import logging
 import shutil
+import subprocess  # Moved here to avoid NameError in type annotations
 
 from .exceptions import PackageManagerError
 
@@ -86,7 +87,12 @@ class PacmanPackageManager(PackageManagerInterface):
             self.logger.error(f"Failed to update Pacman package database: {e}")
             return False
 
-    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+    def _run_command(
+        self,
+        command: List[str],
+        check: bool = True,
+        capture_output: bool = True
+    ) -> subprocess.CompletedProcess:
         """
         Runs a command and handles errors.
 
@@ -98,15 +104,21 @@ class PacmanPackageManager(PackageManagerInterface):
         Returns:
             subprocess.CompletedProcess: The result of the executed command.
         """
-        import subprocess
         try:
-            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            result = subprocess.run(
+                command,
+                capture_output=capture_output,
+                text=True,
+                check=check
+            )
             if result.returncode != 0:
                 self.logger.error(f"Error executing command: {' '.join(command)}")
                 if result.stderr:
                     self.logger.error(f"Error output: {result.stderr}")
                 if check:
-                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+                    raise PackageManagerError(
+                        f"Command '{' '.join(command)}' failed with error code {result.returncode}"
+                    )
             return result
         except FileNotFoundError:
             self.logger.error(f"Command not found: {command[0]}")
@@ -169,7 +181,12 @@ class AptPackageManager(PackageManagerInterface):
             self.logger.error(f"Failed to update APT package database: {e}")
             return False
 
-    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+    def _run_command(
+        self,
+        command: List[str],
+        check: bool = True,
+        capture_output: bool = True
+    ) -> subprocess.CompletedProcess:
         """
         Runs a command and handles errors.
 
@@ -181,15 +198,21 @@ class AptPackageManager(PackageManagerInterface):
         Returns:
             subprocess.CompletedProcess: The result of the executed command.
         """
-        import subprocess
         try:
-            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            result = subprocess.run(
+                command,
+                capture_output=capture_output,
+                text=True,
+                check=check
+            )
             if result.returncode != 0:
                 self.logger.error(f"Error executing command: {' '.join(command)}")
                 if result.stderr:
                     self.logger.error(f"Error output: {result.stderr}")
                 if check:
-                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+                    raise PackageManagerError(
+                        f"Command '{' '.join(command)}' failed with error code {result.returncode}"
+                    )
             return result
         except FileNotFoundError:
             self.logger.error(f"Command not found: {command[0]}")
@@ -251,33 +274,35 @@ class AURHelperManager(PackageManagerInterface):
         """
         self.logger.info(f"Attempting to install AUR helper '{self.helper_name}'...")
         try:
-            import subprocess
-            import tempfile
+            backup_id = None
+            with self._transactional_operation("install_aur_helper"):
+                backup_id = self.backup_manager.create_backup(repository_name='aur_helper', backup_name='install_aur_helper')
+                self.logger.debug("Backup created before installing AUR helper.")
 
-            temp_dir = tempfile.gettempdir()
-            clone_dir = shutil.os.path.join(temp_dir, f"{self.helper_name}-git")
+                # Clone the AUR helper repository
+                temp_dir = shutil.os.path.join(shutil.os.path.expanduser("~"), ".temp_aur_helper_install")
+                if shutil.os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    self.logger.debug(f"Removed existing temporary directory '{temp_dir}' for AUR helper installation.")
 
-            # Clean up any previous failed installation attempts
-            if shutil.os.path.exists(clone_dir):
-                shutil.rmtree(clone_dir)
-                self.logger.debug(f"Removed existing directory '{clone_dir}' for AUR helper installation.")
+                self._run_command(["git", "clone", f"https://aur.archlinux.org/{self.helper_name}.git", temp_dir])
 
-            # Clone the AUR helper repository
-            self._run_command(["git", "clone", f"https://aur.archlinux.org/{self.helper_name}.git", clone_dir])
+                # Build and install the AUR helper
+                self._run_command(["makepkg", "-si", "--noconfirm"], cwd=temp_dir)
 
-            # Build and install the AUR helper
-            self._run_command(["makepkg", "-si", "--noconfirm"], cwd=clone_dir)
-
-            self.logger.info(f"Successfully installed AUR helper '{self.helper_name}'.")
-            return True
+                self.logger.info(f"Successfully installed AUR helper '{self.helper_name}'.")
+                return True
         except PackageManagerError as e:
             self.logger.error(f"Failed to install AUR helper '{self.helper_name}': {e}")
+            if backup_id:
+                self.backup_manager.rollback_backup(repository_name='aur_helper', backup_name=backup_id, target_dir=temp_dir)
             return False
         finally:
             # Clean up the cloned directory
-            if shutil.os.path.exists(clone_dir):
-                shutil.rmtree(clone_dir)
-                self.logger.debug(f"Cleaned up cloned directory '{clone_dir}' after AUR helper installation.")
+            temp_dir = shutil.os.path.join(shutil.os.path.expanduser("~"), ".temp_aur_helper_install")
+            if shutil.os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                self.logger.debug(f"Cleaned up temporary directory '{temp_dir}' after AUR helper installation.")
 
     def update_db(self) -> bool:
         """
@@ -290,7 +315,12 @@ class AURHelperManager(PackageManagerInterface):
         self.logger.debug(f"No database update required for AUR helper '{self.helper_name}'.")
         return True
 
-    def _run_command(self, command: List[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+    def _run_command(
+        self,
+        command: List[str],
+        check: bool = True,
+        capture_output: bool = True
+    ) -> subprocess.CompletedProcess:
         """
         Runs a command and handles errors.
 
@@ -302,15 +332,21 @@ class AURHelperManager(PackageManagerInterface):
         Returns:
             subprocess.CompletedProcess: The result of the executed command.
         """
-        import subprocess
         try:
-            result = subprocess.run(command, capture_output=capture_output, text=True, check=check)
+            result = subprocess.run(
+                command,
+                capture_output=capture_output,
+                text=True,
+                check=check
+            )
             if result.returncode != 0:
                 self.logger.error(f"Error executing command: {' '.join(command)}")
                 if result.stderr:
                     self.logger.error(f"Error output: {result.stderr}")
                 if check:
-                    raise PackageManagerError(f"Command '{' '.join(command)}' failed with error code {result.returncode}")
+                    raise PackageManagerError(
+                        f"Command '{' '.join(command)}' failed with error code {result.returncode}"
+                    )
             return result
         except FileNotFoundError:
             self.logger.error(f"Command not found: {command[0]}")
@@ -321,6 +357,25 @@ class AURHelperManager(PackageManagerInterface):
         except Exception as e:
             self.logger.error(f"An unexpected error occurred: {e}")
             raise PackageManagerError(f"An unexpected error occurred: {e}")
+
+    @contextmanager
+    def _transactional_operation(self, operation_name: str):
+        """
+        Context manager for transactional operations with rollback.
+
+        Args:
+            operation_name (str): Name of the operation.
+
+        Yields:
+            None
+        """
+        try:
+            yield
+        except Exception as e:
+            self.logger.error(f"An error occurred during {operation_name}: {e}")
+            # Placeholder for rollback logic
+            # Example: self.rollback(operation_name)
+            raise PackageManagerError(f"Rollback due to error in {operation_name}: {e}")
 
 
 class PackageManager(PackageManagerInterface):
@@ -430,3 +485,77 @@ class PackageManager(PackageManagerInterface):
         if self.manager:
             return self.manager.update_db()
         return False
+
+
+class OSManager(PackageManagerInterface):
+    """
+    Placeholder for OS-specific operations.
+    """
+
+    def is_available(self) -> bool:
+        """Checks if the OS manager is available."""
+        # Implement OS-specific availability checks
+        return True
+
+    def is_installed(self, package: str) -> bool:
+        """Checks if a package is installed via OS manager."""
+        # Implement OS-specific package check
+        return False
+
+    def install_packages(self, packages: List[str]) -> bool:
+        """Installs packages using OS manager."""
+        # Implement OS-specific package installation
+        return True
+
+    def update_db(self) -> bool:
+        """Updates the OS manager's database."""
+        # Implement OS-specific database update
+        return True
+
+    def _run_command(
+        self,
+        command: List[str],
+        check: bool = True,
+        capture_output: bool = True
+    ) -> subprocess.CompletedProcess:
+        """
+        Runs a command and handles errors.
+
+        Args:
+            command (List[str]): The command to execute.
+            check (bool): Whether to raise an exception on non-zero exit codes.
+            capture_output (bool): Whether to capture the command's output.
+
+        Returns:
+            subprocess.CompletedProcess: The result of the executed command.
+        """
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=capture_output,
+                text=True,
+                check=check
+            )
+            if result.returncode != 0:
+                self.logger.error(f"Error executing command: {' '.join(command)}")
+                if result.stderr:
+                    self.logger.error(f"Error output: {result.stderr}")
+                if check:
+                    raise PackageManagerError(
+                        f"Command '{' '.join(command)}' failed with error code {result.returncode}"
+                    )
+            return result
+        except FileNotFoundError:
+            self.logger.error(f"Command not found: {command[0]}")
+            raise PackageManagerError(f"Command not found: {command[0]}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+            raise PackageManagerError(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred: {e}")
+            raise PackageManagerError(f"An unexpected error occurred: {e}")
+
+
+class PackageManagerError(Exception):
+    """Custom exception for package manager errors."""
+    pass
