@@ -217,84 +217,84 @@ class DotfileManager:
             self.logger.error(f"Failed to create profile '{profile_name}': {e}")
             return False
 
-def clone_repository(self, repository_url: str) -> bool:
-    """
-    Clones a git repository with retry and rollback support.
+    def clone_repository(self, repository_url: str) -> bool:
+        """
+        Clones a git repository with retry and rollback support.
 
-    Args:
-        repository_url (str): URL of the git repository.
+        Args:
+            repository_url (str): URL of the git repository.
 
-    Returns:
-        bool: True if successful, False otherwise.
-    """
-    try:
-        # Normalize the repository URL
-        if repository_url.startswith('git://'):
-            repository_url = repository_url.replace('git://', 'https://')
-        
-        # Handle GitHub URLs without the full https:// prefix
-        if not any(repository_url.startswith(prefix) for prefix in ['http://', 'https://']):
-            if 'github.com' in repository_url:
-                repository_url = f'https://{repository_url}'
-            
-        # Extract repo name from the URL
-        repo_name = Path(repository_url.rstrip('.git')).name
-        local_dir = self.managed_rices_dir / repo_name
-
-        if local_dir.exists():
-            self.logger.warning(f"Repository already exists at {local_dir}")
-            return False
-
-        backup_id = None
+        Returns:
+            bool: True if successful, False otherwise.
+        """
         try:
-            with self._transactional_operation("clone_repository"):
-                backup_id = self.backup_manager.create_backup(repository_name=repo_name, backup_name=create_timestamp())
-                self.logger.info(f"Cloning repository from {repository_url} into {local_dir}")
-                subprocess.run(['git', 'clone', '--recursive', repository_url, str(local_dir)], check=True)
-                self.logger.info(f"Repository cloned successfully to: {local_dir}")
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"An error occurred during clone_repository: {e}")
-            if backup_id:
-                self.backup_manager.rollback_backup(repository_name=repo_name, backup_name=backup_id, target_dir=local_dir)
-            return False
+            # Normalize the repository URL
+            if repository_url.startswith('git://'):
+                repository_url = repository_url.replace('git://', 'https://')
+            
+            # Handle GitHub URLs without the full https:// prefix
+            if not any(repository_url.startswith(prefix) for prefix in ['http://', 'https://']):
+                if 'github.com' in repository_url:
+                    repository_url = f'https://{repository_url}'
+                
+            # Extract repo name from the URL
+            repo_name = Path(repository_url.rstrip('.git')).name
+            local_dir = self.managed_rices_dir / repo_name
 
-        # Update configuration
-        timestamp = create_timestamp()
-        config = {
-            'repository_url': repository_url,
-            'local_directory': str(local_dir),
-            'profiles': {
-                'default': {
-                    'dotfile_directories': {},
-                    'dependencies': [],
-                    'script_config': {
-                        'pre_clone': [],
-                        'post_clone': [],
-                        'pre_install_dependencies': [],
-                        'post_install_dependencies': [],
-                        'pre_apply': [],
-                        'post_apply': [],
-                        'pre_uninstall': [],
-                        'post_uninstall': [],
-                        'custom_scripts': [],
-                        'shell': "bash"
-                    },
-                    'custom_extras_paths': {}
-                }
-            },
-            'active_profile': 'default',
-            'applied': False,
-            'timestamp': timestamp,
-            'nix_config': False
-        }
-        self.config_manager.add_rice_config(repo_name, config)
-        return True
-    except GitOperationError as e:
-        self.logger.error(f"Git operation failed: {e}")
-        return False
-    except Exception as e:
-        self.logger.error(f"Unexpected error during repository cloning: {e}")
-        return False
+            if local_dir.exists():
+                self.logger.warning(f"Repository already exists at {local_dir}")
+                return False
+
+            backup_id = None
+            try:
+                with self._transactional_operation("clone_repository"):
+                    backup_id = self.backup_manager.create_backup(repository_name=repo_name, backup_name=create_timestamp())
+                    self.logger.info(f"Cloning repository from {repository_url} into {local_dir}")
+                    subprocess.run(['git', 'clone', '--recursive', repository_url, str(local_dir)], check=True)
+                    self.logger.info(f"Repository cloned successfully to: {local_dir}")
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"An error occurred during clone_repository: {e}")
+                if backup_id:
+                    self.backup_manager.rollback_backup(repository_name=repo_name, backup_name=backup_id, target_dir=local_dir)
+                return False
+
+            # Update configuration
+            timestamp = create_timestamp()
+            config = {
+                'repository_url': repository_url,
+                'local_directory': str(local_dir),
+                'profiles': {
+                    'default': {
+                        'dotfile_directories': {},
+                        'dependencies': [],
+                        'script_config': {
+                            'pre_clone': [],
+                            'post_clone': [],
+                            'pre_install_dependencies': [],
+                            'post_install_dependencies': [],
+                            'pre_apply': [],
+                            'post_apply': [],
+                            'pre_uninstall': [],
+                            'post_uninstall': [],
+                            'custom_scripts': [],
+                            'shell': "bash"
+                        },
+                        'custom_extras_paths': {}
+                    }
+                },
+                'active_profile': 'default',
+                'applied': False,
+                'timestamp': timestamp,
+                'nix_config': False
+            }
+            self.config_manager.add_rice_config(repo_name, config)
+            return True
+        except GitOperationError as e:
+            self.logger.error(f"Git operation failed: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error during repository cloning: {e}")
+            return False
 
     @contextmanager
     def _transactional_operation(self, operation_name: str):
