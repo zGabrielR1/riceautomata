@@ -32,7 +32,7 @@ from .exceptions import (
     BackupError,
 )
 from .utils import sanitize_path, create_timestamp, confirm_action
-from .package_manager import PackageManager
+from .package_manager import PackageManager, PackageManagerInterface
 from .os_manager import OSManager
 
 
