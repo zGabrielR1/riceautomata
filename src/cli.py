@@ -1,5 +1,5 @@
 # src/cli.py
-# commit
+
 import argparse
 import sys
 import logging
@@ -486,18 +486,16 @@ def _handle_manage_apply_command(args: argparse.Namespace, dotfile_manager: Dotf
 
 # Command definitions
 COMMANDS = {
-    "search": {
-        "help": "Search for configurations or settings",
+    "clone": {
+        "help": "Clone a dotfiles repository",
         "arguments": [
-            ("query", {"help": "Search query"}),
-            (("-r", "--repository"), {"help": "Limit search to specific repository"}),
-            ("--content", {"action": "store_true", "help": "Search in file contents"}),
+            ("repository_url", {"help": "URL of the repository to clone"}),
         ],
-        "handler": handle_search,
+        "handler": handle_clone,
     },
     "apply": {
         "help": "Apply dotfiles from a repository",
-        "aliases": ["-A"],
+        "aliases": ["A"],  # ✅ Corrected: Removed hyphen from alias
         "arguments": [
             ("repository_name", {"help": "Name of the repository to apply"}),
             (("-p", "--profile"), {"help": "Profile to use"}),
@@ -515,7 +513,7 @@ COMMANDS = {
     },
     "manage": {
         "help": "Manage specific dotfiles",
-        "aliases": ["-m"],
+        "aliases": ["m"],  # ✅ Changed to a non-hyphenated alias
         "arguments": [
             ("repository_name", {"help": "Name of the repository to manage"}),
             ("--target-files", {"help": "Comma-separated list of files to manage"}),
@@ -528,7 +526,7 @@ COMMANDS = {
         "help": "Preview changes before applying",
         "arguments": [
             ("repository_name", {"help": "Name of the repository"}),
-            ("-p", "--profile", {"help": "Profile to preview"}),
+            (("-p", "--profile"), {"help": "Profile to preview"}),
             ("--target-packages", {"help": "Comma-separated list of packages to preview"}),
         ],
         "handler": handle_preview,
@@ -537,7 +535,7 @@ COMMANDS = {
         "help": "Show differences between current and new configurations",
         "arguments": [
             ("repository_name", {"help": "Name of the repository"}),
-            ("-p", "--profile", {"help": "Profile to compare"}),
+            (("-p", "--profile"), {"help": "Profile to compare"}),
             ("--target-packages", {"help": "Comma-separated list of packages to compare"}),
         ],
         "handler": handle_diff,
@@ -546,7 +544,7 @@ COMMANDS = {
         "help": "Search for configurations or settings",
         "arguments": [
             ("query", {"help": "Search query"}),
-            ("-r", "--repository", {"help": "Limit search to specific repository"}),
+            (("-r", "--repository"), {"help": "Limit search to specific repository"}),
             ("--content", {"action": "store_true", "help": "Search in file contents"}),
         ],
         "handler": handle_search,
@@ -605,7 +603,7 @@ COMMANDS = {
         "help": "Export configuration to a portable format",
         "arguments": [
             ("repository_name", {"help": "Name of the repository to export"}),
-            ("-o", "--output", {"help": "Output file path (default: rice-export.json)"}),
+            (("-o", "--output"), {"help": "Output file path (default: rice-export.json)"}),
             ("--include-deps", {"action": "store_true", "help": "Include dependency information"}),
             ("--include-assets", {"action": "store_true", "help": "Include asset information"}),
         ],
@@ -615,7 +613,7 @@ COMMANDS = {
         "help": "Import configuration from a file",
         "arguments": [
             ("file", {"help": "Path to the exported configuration file"}),
-            ("-n", "--name", {"help": "Name for the imported configuration"}),
+            (("-n", "--name"), {"help": "Name for the imported configuration"}),
             ("--skip-deps", {"action": "store_true", "help": "Skip dependency installation"}),
             ("--skip-assets", {"action": "store_true", "help": "Skip asset installation"}),
         ],
@@ -628,7 +626,7 @@ COMMANDS = {
                 "help": "Create a new snapshot",
                 "arguments": [
                     ("name", {"help": "Name of the snapshot"}),
-                    ("-d", "--description", {"help": "Description of the snapshot"}),
+                    (("-d", "--description"), {"help": "Description of the snapshot"}),
                 ],
                 "handler": handle_snapshot_create,
             },
@@ -655,7 +653,7 @@ COMMANDS = {
     },
     "list": {
         "help": "List all available profiles",
-        "aliases": ["ls", "list-profiles"],
+        "aliases": ["ls", "list-profiles"],  # ✅ Correct: Aliases do not start with hyphen
         "arguments": [
             ("repository_name", {"nargs": '?', "help": "Optional: Name of the repository to list profiles from"}),
         ],
@@ -665,15 +663,27 @@ COMMANDS = {
 
 def setup_subparser(subparsers: argparse._SubParsersAction, command_name: str, command_data: Dict[str, Any]) -> None:
     """Sets up a subparser for a command."""
-    subparser = subparsers.add_parser(command_name, 
-                                      aliases=command_data.get("aliases", []), 
-                                      help=command_data["help"])
+    subparser = subparsers.add_parser(
+        command_name, 
+        aliases=command_data.get("aliases", []), 
+        help=command_data["help"]
+    )
     arguments = command_data.get("arguments", [])
     if arguments:
         for item in arguments:
             if isinstance(item, tuple) and len(item) == 2:
                 arg_name, arg_params = item
-                subparser.add_argument(*arg_name if isinstance(arg_name, tuple) else arg_name, **arg_params)
+                # Ensure all option strings start with '-'
+                if isinstance(arg_name, tuple):
+                    for opt in arg_name:
+                        if not opt.startswith('-'):
+                            raise ValueError(f"Invalid option string '{opt}': must start with a character '-'")
+                else:
+                    if arg_name.startswith('-'):
+                        pass
+                    else:
+                        raise ValueError(f"Invalid option string '{arg_name}': must start with a character '-'")
+                subparser.add_argument(*arg_name if isinstance(arg_name, tuple) else [arg_name], **arg_params)
             else:
                 print(f"Warning: Invalid argument format for command '{command_name}': {item}. Expected a tuple of (name, params).")
 
@@ -684,7 +694,7 @@ def setup_subparser(subparsers: argparse._SubParsersAction, command_name: str, c
             setup_subparser(subsubparsers, sub_name, sub_data)
             
     subparser.set_defaults(handler=lambda args, dotfile_manager, package_manager, logger: command_data["handler"](args, dotfile_manager, package_manager, logger) if "handler" in command_data else None)
-    
+
 def main():
     """Main entry point for the CLI."""
     sys.excepthook = exception_handler
@@ -695,7 +705,7 @@ def main():
 Examples:
   riceautomata clone https://github.com/user/dotfiles
   riceautomata apply my-dotfiles
-  riceautomata -A my-dotfiles --profile minimal
+  riceautomata A my-dotfiles --profile minimal
   riceautomata manage my-dotfiles --target-packages i3,polybar
   riceautomata list-profiles my-dotfiles
 """)
