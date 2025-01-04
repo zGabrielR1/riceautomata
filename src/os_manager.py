@@ -3,7 +3,7 @@
 import platform
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import logging
 import shutil
 
