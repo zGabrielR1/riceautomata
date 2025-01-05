@@ -45,39 +45,38 @@ def handle_clone(args: argparse.Namespace, dotfile_manager: DotfileManager, pack
 def handle_apply(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger) -> None:
     """Handles the 'apply' command."""
     try:
-        if args.auto:
-            logger.info(f"Starting automated installation for repository: {args.repository_name}")
-            config = dotfile_manager.config_manager.get_rice_config(args.repository_name)
-            if not config:
-                logger.error(f"No configuration found for repository: {args.repository_name}")
-                sys.exit(1)
-
-            local_dir = config.get('local_directory')
-            if not local_dir:
-                logger.error("Local directory not found in configuration")
-                sys.exit(1)
-
-            # Apply automated installation with options
-            success = dotfile_manager.apply_rice_automated(
-                local_dir,
-                skip_backup=args.no_backup,
-                force=args.force,
-                skip_verify=args.skip_verify
-            )
-
-            if not success:
-                logger.error("Automated installation failed")
-                sys.exit(1)
-
-            logger.info("Automated installation completed successfully")
-
+        repository_name = args.repository_name
+        # Validate repository_name format (should not be a path)
+        if '/' in repository_name or '\\' in repository_name:
+            logger.error("Repository name should not be a path. Please provide the repository name only.")
+            sys.exit(1)
+        
+        success = dotfile_manager.apply_dotfiles(
+            repository_name=repository_name,
+            stow_options=args.stow_options.split() if args.stow_options else [],
+            package_manager=package_manager,
+            target_packages=args.target_packages.split(',') if args.target_packages else None,
+            overwrite_symlink=args.overwrite_symlink,
+            custom_paths=dict(path.split(':') for path in args.custom_paths.split(',')) if args.custom_paths else None,
+            ignore_rules=args.ignore_rules,
+            template_context=json.loads(args.template_context),
+            discover_templates=args.discover_templates,
+            custom_scripts=args.custom_scripts.split(',') if args.custom_scripts else None
+        )
+        
+        if success:
+            print(f"{Fore.GREEN}✓ Successfully applied dotfiles for repository '{repository_name}'.{Style.RESET_ALL}")
         else:
-            # Original manual installation logic
-            _handle_manage_apply_command(args, dotfile_manager, package_manager, logger, manage=False)
-
-    except Exception as e:
-        logger.error(f"An error occurred during installation: {e}")
+            print(f"{Fore.RED}✗ Failed to apply dotfiles for repository '{repository_name}'.{Style.RESET_ALL}")
+            sys.exit(1)
+    
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON for template_context.")
         sys.exit(1)
+    except Exception as e:
+        logger.error(f"An error occurred during application: {e}")
+        sys.exit(1)
+
 
 def handle_manage(args: argparse.Namespace, dotfile_manager: DotfileManager, package_manager: PackageManager, logger: logging.Logger) -> None:
     """Handles the 'manage' command."""

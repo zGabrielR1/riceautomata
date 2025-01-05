@@ -93,39 +93,34 @@ class ConfigManager:
         self.config_path = config_path or Path.home() / ".dotfilemanager" / "config.json"
         self.config_data: Dict[str, Any] = {}
         self._load_config()  # Load config on initialization
-    def _load_config(self) -> None:
-        """
-        Loads the configuration from the config file.
-        """
-        try:
-            if self.config_path.exists():
+    def _load_config(self) -> Dict[str, Any]:
+        if self.config_path.exists():
+            try:
                 with self.config_path.open('r', encoding='utf-8') as f:
-                    self.config_data = json.load(f)
+                    data = json.load(f)
                     self.logger.debug(f"Loaded configuration from {self.config_path}")
-            else:
-                self.config_data = {'rices': {}}
-                self.logger.info(f"No configuration file found at {self.config_path}. Initialized with empty config.")
-                self._save_config()
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in configuration file: {e}")
-            raise ConfigurationError(f"Invalid JSON in configuration file: {e}")
-        except Exception as e:
-            self.logger.error(f"Failed to load configuration: {e}")
-            raise ConfigurationError(f"Failed to load configuration: {e}")
+                    return data
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Invalid JSON in config file: {e}")
+                raise ConfigurationError(f"Invalid JSON in config file: {e}")
+            except Exception as e:
+                self.logger.error(f"Failed to load config file: {e}")
+                raise ConfigurationError(f"Failed to load config file: {e}")
+        else:
+            self.logger.debug(f"Config file not found at {self.config_path}. Creating a new one.")
+            return {'rices': {}}
+
 
     def _save_config(self) -> None:
-        """
-        Saves the current configuration to the config file.
-        """
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with self.config_path.open('w', encoding='utf-8') as f:
                 json.dump(self.config_data, f, indent=4)
                 self.logger.debug(f"Saved configuration to {self.config_path}")
         except Exception as e:
-            self.logger.error(f"Failed to save configuration: {e}")
-            raise ConfigurationError(f"Failed to save configuration: {e}")
-
+            self.logger.error(f"Failed to save config file: {e}")
+            raise ConfigurationError(f"Failed to save config file: {e}")
+            
     def add_rice_config(self, repository_name: str, config: Dict[str, Any]) -> None:
         """
         Adds or updates a rice configuration.

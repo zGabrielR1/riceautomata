@@ -1,4 +1,4 @@
-# dotfilemanager/dotfile_analyzer.py
+# src/dotfile_analyzer.py
 
 import json
 import re
@@ -23,18 +23,19 @@ class DotfileAnalyzer:
     """
     Analyzes dotfile directories to determine structure and dependencies.
     """
-    def __init__(self, dependency_map: Dict[str, str], logger: Optional[logging.Logger] = None):
+    def __init__(self, dependency_map: Dict[str, Any], logger: Optional[logging.Logger] = None):
         """
         Initializes the DotfileAnalyzer.
 
         Args:
-            dependency_map (Dict[str, str]): Mapping of configurations to packages.
+            dependency_map (Dict[str, Any]): Mapping of configurations to packages.
             logger (Optional[logging.Logger]): Logger instance.
         """
         self.dependency_map = dependency_map
         self.logger = logger or logging.getLogger('DotfileManager')
         # Precompile regex patterns
         self.package_regex = re.compile(r'[\w-]+(?:>=?[\d.]+)?')
+
     def build_tree(self, root_path: Path) -> DotfileNode:
         """
         Builds a tree structure of the dotfiles directory.
@@ -61,6 +62,9 @@ class DotfileAnalyzer:
 
             if current_node.path.is_dir():
                 for item in current_node.path.iterdir():
+                    # Avoid infinite recursion in case of symlinks pointing upwards
+                    if item.is_symlink() and item.resolve().is_dir():
+                        continue
                     child_node = DotfileNode(item)
                     current_node.children.append(child_node)
                     stack.append(child_node)
@@ -77,7 +81,6 @@ class DotfileAnalyzer:
         Returns:
             bool: True if dotfile/config, False otherwise.
         """
-        # Implement enhanced dotfile detection logic
         name = path.name.lower()
         known_config_dirs = {
             'oh-my-zsh', 'zsh', 'bash', 'fish', 'tmux', 'kitty', 'alacritty', 'wezterm',

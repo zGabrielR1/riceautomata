@@ -231,14 +231,17 @@ class DotfileManager:
             # Normalize the repository URL
             if repository_url.startswith('git://'):
                 repository_url = repository_url.replace('git://', 'https://')
+                self.logger.debug(f"Updated repository URL: {repository_url}")
             
             # Handle GitHub URLs without the full https:// prefix
             if not any(repository_url.startswith(prefix) for prefix in ['http://', 'https://']):
                 if 'github.com' in repository_url:
                     repository_url = f'https://{repository_url}'
+                    self.logger.debug(f"Updated GitHub repository URL: {repository_url}")
                 
             # Extract repo name from the URL
             repo_name = Path(repository_url.rstrip('.git')).name
+            self.logger.debug(f"Extracted repository name: {repo_name}")
             local_dir = self.managed_rices_dir / repo_name
 
             if local_dir.exists():
@@ -287,6 +290,7 @@ class DotfileManager:
                 'timestamp': timestamp,
                 'nix_config': False
             }
+            self.logger.debug(f"Adding configuration for repository '{repo_name}': {config}")
             self.config_manager.add_rice_config(repo_name, config)
             return True
         except GitOperationError as e:
@@ -295,6 +299,8 @@ class DotfileManager:
         except Exception as e:
             self.logger.error(f"Unexpected error during repository cloning: {e}")
             return False
+
+
 
     @contextmanager
     def _transactional_operation(self, operation_name: str):
@@ -470,12 +476,12 @@ class DotfileManager:
         """Applies a single item using GNU Stow."""
         stow_cmd = ['stow', '-v'] + stow_options + [item_name]
         try:
-            self.logger.info(f"Stowing {item_name} to ~/.config/")
+            self.logger.info(f"Stowing '{item_name}' to ~/.config/")
             subprocess.run(stow_cmd, check=True, cwd=str(local_dir))
-            self.logger.debug(f"Successfully stowed {item_name}")
+            self.logger.debug(f"Successfully stowed '{item_name}'")
             return True
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"Failed to stow {item_name}: {e}")
+            self.logger.error(f"Failed to stow '{item_name}': {e}")
             return False
         except FileNotFoundError:
             self.logger.error("GNU Stow is not installed or not found in PATH.")
@@ -487,7 +493,7 @@ class DotfileManager:
         stow_options: Optional[List[str]] = None,
         package_manager: Optional[PackageManagerInterface] = None,
         target_packages: Optional[List[str]] = None,
-        overwrite_symlink: Optional[str] = None,
+        overwrite_symlink: bool = False,
         custom_paths: Optional[Dict[str, str]] = None,
         ignore_rules: bool = False,
         template_context: Dict[str, Any] = {},
@@ -502,7 +508,7 @@ class DotfileManager:
             stow_options (Optional[List[str]]): Additional options for stow.
             package_manager (Optional[PackageManagerInterface]): Package manager instance.
             target_packages (Optional[List[str]]): List of target packages.
-            overwrite_symlink (Optional[str]): Path to overwrite existing symlinks.
+            overwrite_symlink (bool): Whether to overwrite existing symlinks.
             custom_paths (Optional[Dict[str, str]]): Custom paths for extra directories.
             ignore_rules (bool): Whether to ignore rules during application.
             template_context (Dict[str, Any]): Context for template rendering.
@@ -540,12 +546,16 @@ class DotfileManager:
                 ignore_rules=ignore_rules
             )
 
+            if not dotfile_dirs:
+                self.logger.error("No dotfile directories found to apply.")
+                return False
+
             # 3. Backup existing configurations
             self._backup_existing_configs(config_home, dotfile_dirs)
 
             # 4. Apply dotfiles using Stow
-            for item_name, item_category in dotfile_dirs.items():
-                item_path = Path(item_name)
+            for item_path_str, item_category in dotfile_dirs.items():
+                item_path = Path(item_path_str)
                 # a. Backup existing config if category is 'config'
                 if item_category == "config":
                     target_path = config_home / item_path.name
@@ -553,6 +563,7 @@ class DotfileManager:
 
                 # b. Stow item
                 if not self._stow_item(local_dir, item_path.name, stow_options or []):
+                    self.logger.error(f"Failed to stow {item_path.name}. Aborting.")
                     return False
 
                 # c. Record the applied item in config
@@ -584,14 +595,18 @@ class DotfileManager:
             self.logger.error(f"Configuration error: {e}")
             return False
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"Subprocess error: {e}")
+            self.logger.error(f"Subprocess error during stow: {e}")
             return False
         except FileNotFoundError as e:
             self.logger.error(f"File not found error: {e}")
             return False
         except Exception as e:
-            self.logger.error(f"Failed to manage dotfiles: {e}")
+            self.logger.error(f"Failed to apply dotfiles: {e}")
+            self.logger.info("Initiating rollback...")
+            self.backup_manager.rollback_all_backups()
+            self.logger.info("Rollback completed.")
             return False
+
 
     def _install_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> bool:
         """Detects and installs required packages."""
@@ -648,21 +663,26 @@ class DotfileManager:
         ignore_rules: bool = False
     ) -> Dict[str, str]:
         """
-        Discovers dotfile directories based on repository configuration, predefined rules, target packages, and custom paths.
-
-        Args:
-            local_dir (Path): The local directory of the cloned repository.
-            repo_config (Optional[RepositoryConfig]): The repository configuration object.
-            target_packages (Optional[List[str]]): Optional list of target packages.
-            custom_paths (Optional[Dict[str, str]]): Optional dictionary of custom paths.
-            ignore_rules (bool): Flag to ignore predefined rules.
-
-        Returns:
-            Dict[str, str]: A dictionary mapping discovered directory paths to their categories.
+        Discovers dotfile directories recursively using DotfileAnalyzer.
         """
         dotfile_dirs: Dict[str, str] = {}
 
-        # Prioritize repository-specific configuration
+        # Use DotfileAnalyzer to build the tree
+        tree = self.dotfile_analyzer.build_tree(local_dir)
+        self.dotfile_analyzer.find_dependencies(tree)
+
+        # Traverse the tree to find categorized directories
+        def traverse(node: DotfileNode):
+            if node.is_dotfile and node.path.is_dir():
+                category = self._categorize_directory(node.path)
+                if category:
+                    dotfile_dirs[str(node.path)] = category
+            for child in node.children:
+                traverse(child)
+
+        traverse(tree)
+
+        # Handle repository-specific config
         if repo_config:
             for directory in repo_config.get_dotfile_directories():
                 dir_path = Path(directory)
@@ -677,7 +697,7 @@ class DotfileManager:
         # Apply predefined rules if not ignoring rules
         if not ignore_rules:
             for item in local_dir.iterdir():
-                if item.is_dir():
+                if item.is_dir() and str(item) not in dotfile_dirs:
                     category = self._categorize_directory(item)
                     if category:
                         dotfile_dirs[str(item)] = category
@@ -702,44 +722,82 @@ class DotfileManager:
             for path_str, category in custom_paths.items():
                 path = Path(path_str)
                 abs_path = path if path.is_absolute() else local_dir / path
-                if abs_path.exists():
+                if abs_path.is_dir():
                     dotfile_dirs[str(abs_path)] = category
                 else:
-                    self.logger.warning(f"Custom path does not exist: {abs_path}")
+                    self.logger.warning(f"Custom path does not exist or is not a directory: {abs_path}")
+
+        # Log discovered directories for debugging
+        self.logger.debug(f"Discovered dotfile directories: {dotfile_dirs}")
 
         return dotfile_dirs
 
+
     def _categorize_directory(self, directory: Path) -> Optional[str]:
         """
-        Categorizes a directory based on its name or content.
+        Categorizes a directory based on its name or parent structure.
 
         Args:
-            directory (Path): The directory path to categorize.
+            directory (Path): Directory to categorize.
 
         Returns:
-            Optional[str]: The category of the directory or None if not categorized.
+            Optional[str]: Category name or None if not categorizable.
         """
         dir_name = directory.name.lower()
+        parent_name = directory.parent.name.lower()
 
-        # Example categories based on your previous logic
+        # Categorize based on known config directories
         if dir_name in ["config", ".config"]:
             return "config"
-        elif dir_name in ["scripts", "bin"]:
-            return "script"
-        elif dir_name in ("wallpapers", "backgrounds"):
-            return "wallpaper"
-        elif dir_name in ["themes", "styles", "gtk-3.0", "gtk-4.0"]:
-            return "theme"
-        elif dir_name == "extras":
-            return "extra"
-        elif dir_name in ["local", ".local"]:
-            return "local"
-        elif dir_name in ["cache", ".cache"]:
-            return "cache"
-        # Add more categories as needed based on your specific logic
 
-        # If not explicitly categorized, return None or a default category
+        # Categorize based on asset directories
+        asset_categories = {
+            "wallpapers": "wallpaper",
+            "backgrounds": "wallpaper",
+            "icons": "icons",
+            "themes": "theme",
+            "fonts": "fonts",
+            "assets": "assets",
+            "styles": "theme",
+            "shaders": "shaders",
+            "images": "images",
+            "readme_resources": "readme_resources",
+            "stickers": "stickers"
+        }
+        if dir_name in asset_categories:
+            return asset_categories[dir_name]
+
+        # Categorize based on shell config directories
+        shell_categories = {
+            "plugins": "plugins",
+            "themes": "shell_themes",
+            "custom": "custom",
+            "lib": "lib",
+            "tools": "tools",
+            "templates": "templates"
+        }
+        if parent_name in ["oh-my-zsh", "zsh", "bash", "fish"] and dir_name in shell_categories:
+            return shell_categories[dir_name]
+
+        # Categorize based on known script directories
+        script_categories = {
+            "scripts": "scripts",
+            "bin": "scripts"
+        }
+        if dir_name in script_categories:
+            return script_categories[dir_name]
+
+        # Fallback to generic categorization based on name patterns
+        if re.match(r'.*theme.*', dir_name):
+            return "theme"
+        elif re.match(r'.*icon.*', dir_name):
+            return "icons"
+        elif re.match(r'.*script.*', dir_name):
+            return "scripts"
+
         return None
+
+
 
     def create_snapshot(self, name: str, description: str = "") -> bool:
         """
