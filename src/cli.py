@@ -510,6 +510,7 @@ COMMANDS = {
             ("--ignore-rules", {"action": "store_true", "help": "Ignore discovery rules"}),
             (("--overwrite-symlink",), {"help": "Overwrite existing symlinks", "action": "store_true"}),
             ("--template-context", {"help": "JSON string containing template context variables", "default": "{}"}),
+            ("--discover-templates", {"action": "store_true", "help": "Automatically discover and process template files", "default": False}),
         ],
         "handler": handle_apply,
     },
