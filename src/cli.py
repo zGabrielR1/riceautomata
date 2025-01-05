@@ -509,6 +509,7 @@ COMMANDS = {
             ("--custom-paths", {"help": "Comma-separated list of custom paths"}),
             ("--ignore-rules", {"action": "store_true", "help": "Ignore discovery rules"}),
             (("--overwrite-symlink",), {"help": "Overwrite existing symlinks", "action": "store_true"}),
+            ("--template-context", {"help": "JSON string containing template context variables", "default": "{}"}),
         ],
         "handler": handle_apply,
     },
