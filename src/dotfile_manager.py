@@ -472,19 +472,76 @@ class DotfileManager:
                 raise FileOperationError(f"Failed to backup {target_path}: {e}")
         return None
 
-    def _stow_item(self, local_dir: Path, item_name: str, stow_options: List[str]) -> bool:
-        """Applies a single item using GNU Stow."""
-        stow_cmd = ['stow', '-v'] + stow_options + [item_name]
+    def _stow_item(self, local_dir: Path, item_path: Path, stow_options: List[str]) -> bool:
+        """
+        Applies a single item using GNU Stow.
+        
+        Args:
+            local_dir (Path): Base directory containing the dotfiles
+            item_path (Path): Path to the item to stow, relative to local_dir
+            stow_options (List[str]): Additional options for stow
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
-            self.logger.info(f"Stowing '{item_name}' to ~/.config/")
-            subprocess.run(stow_cmd, check=True, cwd=str(local_dir))
-            self.logger.debug(f"Successfully stowed '{item_name}'")
+            # Ensure paths are absolute
+            local_dir = local_dir.resolve()
+            item_path = (local_dir / item_path).resolve()
+            
+            if not item_path.exists():
+                self.logger.error(f"Item path does not exist: {item_path}")
+                return False
+                
+            # Get target directory based on item type
+            if '.config' in item_path.parts:
+                target_dir = Path.home() / '.config'
+            elif '.local' in item_path.parts:
+                target_dir = Path.home() / '.local'
+            elif any(x in item_path.parts for x in ['.themes', 'themes']):
+                target_dir = Path.home() / '.themes'
+            elif any(x in item_path.parts for x in ['.icons', 'icons']):
+                target_dir = Path.home() / '.icons'
+            elif any(x in item_path.parts for x in ['wallpapers', '.walls']):
+                target_dir = Path.home() / '.local/share/wallpapers'
+            elif 'fonts' in item_path.parts:
+                target_dir = Path.home() / '.local/share/fonts'
+            else:
+                target_dir = Path.home()
+                
+            # Create target directory if it doesn't exist
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Prepare stow command
+            stow_cmd = ['stow']
+            stow_cmd.extend(stow_options)
+            stow_cmd.extend([
+                '--dir', str(local_dir),
+                '--target', str(target_dir),
+                '--verbose=3',  # Maximum verbosity for debugging
+                str(item_path.relative_to(local_dir))
+            ])
+            
+            self.logger.debug(f"Running stow command: {' '.join(stow_cmd)}")
+            
+            # Run stow
+            result = subprocess.run(
+                stow_cmd,
+                capture_output=True,
+                text=True,
+                check=False  # Don't raise exception, we'll handle errors
+            )
+            
+            if result.returncode != 0:
+                self.logger.error(f"Stow failed with return code {result.returncode}")
+                self.logger.error(f"Stow stderr: {result.stderr}")
+                return False
+                
+            self.logger.debug(f"Stow stdout: {result.stdout}")
             return True
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Failed to stow '{item_name}': {e}")
-            return False
-        except FileNotFoundError:
-            self.logger.error("GNU Stow is not installed or not found in PATH.")
+            
+        except Exception as e:
+            self.logger.error(f"Error in _stow_item: {str(e)}")
             return False
 
     def apply_dotfiles(
@@ -502,42 +559,45 @@ class DotfileManager:
     ) -> bool:
         """
         Applies dotfiles from a repository using GNU Stow.
-
-        Args:
-            repository_name (str): Name of the repository.
-            stow_options (Optional[List[str]]): Additional options for stow.
-            package_manager (Optional[PackageManagerInterface]): Package manager instance.
-            target_packages (Optional[List[str]]): List of target packages.
-            overwrite_symlink (bool): Whether to overwrite existing symlinks.
-            custom_paths (Optional[Dict[str, str]]): Custom paths for extra directories.
-            ignore_rules (bool): Whether to ignore rules during application.
-            template_context (Dict[str, Any]): Context for template rendering.
-            discover_templates (bool): Whether to discover and process templates.
-            custom_scripts (Optional[List[str]]): Additional scripts to run.
-
-        Returns:
-            bool: True if successful, False otherwise.
         """
         try:
+            # 1. Get rice configuration
             rice_config = self.config_manager.get_rice_config(repository_name)
             if not rice_config:
-                raise ConfigurationError(f"No configuration found for repository: {repository_name}")
+                self.logger.error(f"No configuration found for repository: {repository_name}")
+                return False
 
             local_dir = Path(rice_config["local_directory"])
-            config_home = Path.home() / ".config"
-            config_home.mkdir(parents=True, exist_ok=True)
+            if not local_dir.exists():
+                self.logger.error(f"Repository directory not found: {local_dir}")
+                return False
 
-            # Load repository-specific configuration (rice.json)
+            # 2. Create necessary directories
+            config_dirs = {
+                'config': Path.home() / '.config',
+                'local': Path.home() / '.local',
+                'share': Path.home() / '.local/share',
+                'themes': Path.home() / '.themes',
+                'icons': Path.home() / '.icons',
+                'fonts': Path.home() / '.local/share/fonts',
+                'wallpapers': Path.home() / '.local/share/wallpapers',
+                'bin': Path.home() / '.local/bin',
+            }
+            
+            for dir_path in config_dirs.values():
+                dir_path.mkdir(parents=True, exist_ok=True)
+
+            # 3. Load or create repository-specific configuration
             repo_config = self.config_manager.get_repository_config(local_dir)
             if not repo_config:
-                self.logger.warning(f"No 'rice.json' found for repository '{repository_name}'. Using default behavior.")
-                repo_config = RepositoryConfig()  # Use an empty configuration as a fallback
+                self.logger.info(f"No 'rice.json' found for repository '{repository_name}'. Using automatic detection.")
+                repo_config = RepositoryConfig(logger=self.logger)
 
-            # 1. Install required packages
+            # 4. Install required packages if any are detected
             if not self._install_required_packages(local_dir, repo_config):
                 return False
 
-            # 2. Discover dotfile directories
+            # 5. Discover dotfile directories
             dotfile_dirs = self._discover_dotfile_directories(
                 local_dir,
                 repo_config=repo_config,
@@ -547,66 +607,65 @@ class DotfileManager:
             )
 
             if not dotfile_dirs:
-                self.logger.error("No dotfile directories found to apply.")
+                self.logger.error(
+                    "No dotfile directories found to apply. "
+                    "Please ensure the repository contains dotfiles in standard locations "
+                    "(e.g., .config/, .local/, etc.) or create a rice.json configuration file."
+                )
                 return False
 
-            # 3. Backup existing configurations
-            self._backup_existing_configs(config_home, dotfile_dirs)
-
-            # 4. Apply dotfiles using Stow
-            for item_path_str, item_category in dotfile_dirs.items():
+            # 6. Backup existing configurations
+            for item_path_str, category in dotfile_dirs.items():
                 item_path = Path(item_path_str)
-                # a. Backup existing config if category is 'config'
-                if item_category == "config":
-                    target_path = config_home / item_path.name
+                target_dir = config_dirs.get(category, Path.home())
+                target_path = target_dir / item_path.name
+                
+                if target_path.exists():
                     self._backup_existing_config(target_path)
 
-                # b. Stow item
-                if not self._stow_item(local_dir, item_path.name, stow_options or []):
-                    self.logger.error(f"Failed to stow {item_path.name}. Aborting.")
+            # 7. Apply dotfiles using Stow
+            stow_opts = list(stow_options) if stow_options else []
+            if overwrite_symlink:
+                stow_opts.extend(['--adopt', '--no-folding'])
+
+            for item_path_str, category in dotfile_dirs.items():
+                item_path = Path(item_path_str)
+                target_dir = config_dirs.get(category, Path.home())
+                
+                # Create target directory if it doesn't exist
+                target_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Stow item with target directory
+                if not self._stow_item(local_dir, item_path, stow_opts):
+                    self.logger.error(f"Failed to stow {item_path}. Aborting.")
                     return False
 
-                # c. Record the applied item in config
-                rice_config["dotfile_directories"][str(item_path)] = item_category
-                rice_config["profiles"]["default"].setdefault('configs', []).append(
-                    {
-                        "name": item_path.name,
-                        "path": str(config_home / item_path.name),
-                        "type": item_category,
-                        "applied_at": create_timestamp(),
-                    }
-                )
+                # Record the applied item in config
+                rice_config.setdefault("dotfile_directories", {})[str(item_path)] = category
+                rice_config.setdefault("profiles", {}).setdefault("default", {}).setdefault("configs", []).append({
+                    "name": item_path.name,
+                    "path": str(target_dir / item_path.name),
+                    "type": category,
+                    "applied_at": create_timestamp(),
+                })
 
-            # 5. Handle templates
+            # 8. Handle templates if requested
             if discover_templates:
                 if not self._handle_templates(local_dir, template_context):
                     return False
 
-            # 6. Run custom scripts
+            # 9. Run custom scripts if provided
             if custom_scripts:
                 if not self._run_custom_scripts(local_dir, custom_scripts):
                     return False
 
-            # 7. Update rice config
+            # 10. Update rice config
             self._update_rice_config(repository_name, rice_config)
             return True
 
-        except ConfigurationError as e:
-            self.logger.error(f"Configuration error: {e}")
-            return False
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Subprocess error during stow: {e}")
-            return False
-        except FileNotFoundError as e:
-            self.logger.error(f"File not found error: {e}")
-            return False
         except Exception as e:
-            self.logger.error(f"Failed to apply dotfiles: {e}")
-            self.logger.info("Initiating rollback...")
-            self.backup_manager.rollback_all_backups()
-            self.logger.info("Rollback completed.")
+            self.logger.error(f"Error applying dotfiles: {str(e)}")
             return False
-
 
     def _install_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> bool:
         """Detects and installs required packages."""
@@ -665,139 +724,74 @@ class DotfileManager:
         """
         Discovers dotfile directories recursively using DotfileAnalyzer.
         """
-        dotfile_dirs: Dict[str, str] = {}
+        self.logger.info(f"Discovering dotfiles in {local_dir}")
+        dotfile_dirs = {}
 
-        # Use DotfileAnalyzer to build the tree
-        tree = self.dotfile_analyzer.build_tree(local_dir)
-        self.dotfile_analyzer.find_dependencies(tree)
-
-        # Traverse the tree to find categorized directories
-        def traverse(node: DotfileNode):
-            if node.is_dotfile and node.path.is_dir():
-                category = self._categorize_directory(node.path)
-                if category:
-                    dotfile_dirs[str(node.path)] = category
+        # Build tree using DotfileAnalyzer
+        root_node = self.dotfile_analyzer.build_tree(local_dir)
+        
+        def traverse(node: DotfileNode) -> None:
+            if node.is_dotfile:
+                # Get the target path where this dotfile should be installed
+                if node.target_path:
+                    relative_path = node.path.relative_to(local_dir)
+                    dotfile_dirs[str(relative_path)] = node.config_type or "config"
+                    self.logger.debug(f"Found dotfile: {relative_path} of type {node.config_type}")
+            
             for child in node.children:
                 traverse(child)
 
-        traverse(tree)
-
-        # Handle repository-specific config
-        if repo_config:
-            for directory in repo_config.get_dotfile_directories():
-                dir_path = Path(directory)
-                if not dir_path.is_absolute():
-                    dir_path = local_dir / dir_path
-                if dir_path.is_dir():
-                    category = repo_config.get_dotfile_categories().get(directory, "config")
+        # Traverse the tree to find all dotfiles
+        traverse(root_node)
+        
+        # If no dotfiles were found through automatic detection, check repository config
+        if not dotfile_dirs and repo_config:
+            config_dirs = repo_config.get_dotfile_directories()
+            categories = repo_config.get_dotfile_categories()
+            
+            for dir_path in config_dirs:
+                dir_path = Path(dir_path)
+                if (local_dir / dir_path).exists():
+                    category = categories.get(str(dir_path), "config")
                     dotfile_dirs[str(dir_path)] = category
-                else:
-                    self.logger.warning(f"Directory '{dir_path}' specified in repository config does not exist.")
+                    self.logger.debug(f"Found dotfile from config: {dir_path} of type {category}")
 
-        # Apply predefined rules if not ignoring rules
-        if not ignore_rules:
-            for item in local_dir.iterdir():
-                if item.is_dir() and str(item) not in dotfile_dirs:
-                    category = self._categorize_directory(item)
-                    if category:
-                        dotfile_dirs[str(item)] = category
-
-        # Consider target packages if provided
-        if target_packages:
-            for package in target_packages:
-                dirs = self.dependency_map.get(package, [])
-                if isinstance(dirs, str):
-                    dirs = [dirs]
-                for dir_name in dirs:
-                    dir_path = local_dir / dir_name
-                    if dir_path.is_dir():
-                        category = self._categorize_directory(dir_path)
-                        if category:
-                            dotfile_dirs[str(dir_path)] = category
-                    else:
-                        self.logger.warning(f"Directory '{dir_path}' for package '{package}' does not exist.")
-
-        # Add custom paths
+        # Add custom paths if provided
         if custom_paths:
-            for path_str, category in custom_paths.items():
-                path = Path(path_str)
-                abs_path = path if path.is_absolute() else local_dir / path
-                if abs_path.is_dir():
-                    dotfile_dirs[str(abs_path)] = category
-                else:
-                    self.logger.warning(f"Custom path does not exist or is not a directory: {abs_path}")
+            for path, category in custom_paths.items():
+                path = Path(path)
+                if (local_dir / path).exists():
+                    dotfile_dirs[str(path)] = category
+                    self.logger.debug(f"Added custom path: {path} of type {category}")
 
-        # Log discovered directories for debugging
-        self.logger.debug(f"Discovered dotfile directories: {dotfile_dirs}")
+        if not dotfile_dirs:
+            # Look for common dotfile locations if nothing else was found
+            common_locations = [
+                ('.config', 'config'),
+                ('.local', 'local'),
+                ('.themes', 'themes'),
+                ('.icons', 'icons'),
+                ('.walls', 'wallpapers'),
+                ('wallpapers', 'wallpapers'),
+                ('themes', 'themes'),
+                ('icons', 'icons'),
+                ('fonts', 'fonts'),
+            ]
+            
+            for location, category in common_locations:
+                path = local_dir / location
+                if path.exists() and path.is_dir():
+                    dotfile_dirs[location] = category
+                    self.logger.debug(f"Found common dotfile location: {location} of type {category}")
+
+        if not dotfile_dirs:
+            self.logger.warning(
+                "No dotfiles found through automatic detection or configuration. "
+                "This might indicate that the repository structure is not recognized. "
+                "Consider creating a rice.json configuration file or using custom paths."
+            )
 
         return dotfile_dirs
-
-
-    def _categorize_directory(self, directory: Path) -> Optional[str]:
-        """
-        Categorizes a directory based on its name or parent structure.
-
-        Args:
-            directory (Path): Directory to categorize.
-
-        Returns:
-            Optional[str]: Category name or None if not categorizable.
-        """
-        dir_name = directory.name.lower()
-        parent_name = directory.parent.name.lower()
-
-        # Categorize based on known config directories
-        if dir_name in ["config", ".config"]:
-            return "config"
-
-        # Categorize based on asset directories
-        asset_categories = {
-            "wallpapers": "wallpaper",
-            "backgrounds": "wallpaper",
-            "icons": "icons",
-            "themes": "theme",
-            "fonts": "fonts",
-            "assets": "assets",
-            "styles": "theme",
-            "shaders": "shaders",
-            "images": "images",
-            "readme_resources": "readme_resources",
-            "stickers": "stickers"
-        }
-        if dir_name in asset_categories:
-            return asset_categories[dir_name]
-
-        # Categorize based on shell config directories
-        shell_categories = {
-            "plugins": "plugins",
-            "themes": "shell_themes",
-            "custom": "custom",
-            "lib": "lib",
-            "tools": "tools",
-            "templates": "templates"
-        }
-        if parent_name in ["oh-my-zsh", "zsh", "bash", "fish"] and dir_name in shell_categories:
-            return shell_categories[dir_name]
-
-        # Categorize based on known script directories
-        script_categories = {
-            "scripts": "scripts",
-            "bin": "scripts"
-        }
-        if dir_name in script_categories:
-            return script_categories[dir_name]
-
-        # Fallback to generic categorization based on name patterns
-        if re.match(r'.*theme.*', dir_name):
-            return "theme"
-        elif re.match(r'.*icon.*', dir_name):
-            return "icons"
-        elif re.match(r'.*script.*', dir_name):
-            return "scripts"
-
-        return None
-
-
 
     def create_snapshot(self, name: str, description: str = "") -> bool:
         """

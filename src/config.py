@@ -12,28 +12,79 @@ class RepositoryConfig:
     Represents the configuration for a specific rice repository (e.g., from rice.json).
     """
 
-    def __init__(self, repo_config_path: Path, logger: logging.Logger):
-        self.logger = logger
+    def __init__(self, repo_config_path: Optional[Path] = None, logger: Optional[logging.Logger] = None):
+        self.logger = logger or logging.getLogger('DotfileManager')
         self.path = repo_config_path
         self.config: Dict[str, Any] = self._load_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Loads the repository configuration from the JSON file."""
+        # Default configuration structure
+        default_config = {
+            "dotfiles": {
+                "directories": [],
+                "categories": {}
+            },
+            "dependencies": {},
+            "scripts": {},
+            "templates": {},
+            "profiles": {
+                "default": {
+                    "dotfile_directories": {},
+                    "dependencies": [],
+                    "script_config": {
+                        "pre_clone": [],
+                        "post_clone": [],
+                        "pre_install_dependencies": [],
+                        "post_install_dependencies": [],
+                        "pre_apply": [],
+                        "post_apply": [],
+                        "pre_uninstall": [],
+                        "post_uninstall": [],
+                        "custom_scripts": [],
+                        "shell": "bash"
+                    }
+                }
+            }
+        }
+
         try:
-            if self.path.exists():
+            if self.path and self.path.exists():
                 with self.path.open("r", encoding="utf-8") as f:
                     config = json.load(f)
                     self.logger.debug(f"Loaded repository configuration from {self.path}")
-                    return config
+                    # Merge with default config to ensure all required fields exist
+                    return self._merge_configs(default_config, config)
             else:
-                self.logger.warning(f"Repository configuration file not found at {self.path}.")
-                return {}  # Default to an empty config if not found
+                self.logger.info("No repository configuration file found. Using default configuration.")
+                return default_config
         except json.JSONDecodeError as e:
             self.logger.error(f"Invalid JSON in repository configuration file: {e}")
             raise ConfigurationError(f"Invalid JSON in repository configuration file: {e}")
         except Exception as e:
             self.logger.error(f"Failed to load repository configuration: {e}")
             raise ConfigurationError(f"Failed to load repository configuration: {e}")
+
+    def _merge_configs(self, default: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Deep merges two configurations, with user config taking precedence.
+        
+        Args:
+            default (Dict[str, Any]): Default configuration
+            user (Dict[str, Any]): User configuration
+            
+        Returns:
+            Dict[str, Any]: Merged configuration
+        """
+        result = default.copy()
+        
+        for key, value in user.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._merge_configs(result[key], value)
+            else:
+                result[key] = value
+                
+        return result
 
     def get_dotfile_directories(self) -> List[str]:
         """Returns a list of dotfile directories specified in the config."""
@@ -173,7 +224,7 @@ class ConfigManager:
             description (str): Description of the profile.
 
         Raises:
-            ConfigurationError: If the rice configuration is not found or the profile already exists.
+            ConfigurationError: If the rice configuration or the profile already exists.
         """
         rice_config = self.get_rice_config(repository_name)
         if not rice_config:
