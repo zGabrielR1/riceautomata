@@ -493,20 +493,28 @@ class DotfileManager:
                 self.logger.error(f"Item path does not exist: {item_path}")
                 return False
                 
-            # Get target directory based on item type
-            if '.config' in item_path.parts:
-                target_dir = Path.home() / '.config'
-            elif '.local' in item_path.parts:
-                target_dir = Path.home() / '.local'
-            elif any(x in item_path.parts for x in ['.themes', 'themes']):
-                target_dir = Path.home() / '.themes'
-            elif any(x in item_path.parts for x in ['.icons', 'icons']):
-                target_dir = Path.home() / '.icons'
-            elif any(x in item_path.parts for x in ['wallpapers', '.walls']):
-                target_dir = Path.home() / '.local/share/wallpapers'
-            elif 'fonts' in item_path.parts:
-                target_dir = Path.home() / '.local/share/fonts'
-            else:
+            # Standard XDG and dotfile directories with their target paths
+            standard_targets = {
+                '.config': Path.home() / '.config',
+                '.local': Path.home() / '.local',
+                '.themes': Path.home() / '.themes',
+                '.icons': Path.home() / '.icons',
+                '.walls': Path.home() / '.local/share/wallpapers',
+                '.wallpapers': Path.home() / '.local/share/wallpapers',
+                '.fonts': Path.home() / '.local/share/fonts',
+                '.bin': Path.home() / '.local/bin',
+                '.scripts': Path.home() / '.local/bin',
+            }
+            
+            # Determine target directory based on item path
+            target_dir = None
+            for dir_name, target in standard_targets.items():
+                if dir_name in item_path.parts:
+                    target_dir = target
+                    break
+            
+            # Default to home directory if no specific target found
+            if not target_dir:
                 target_dir = Path.home()
                 
             # Create target directory if it doesn't exist
@@ -522,6 +530,7 @@ class DotfileManager:
                 str(item_path.relative_to(local_dir))
             ])
             
+            self.logger.info(f"Stowing {item_path.name} to {target_dir}")
             self.logger.debug(f"Running stow command: {' '.join(stow_cmd)}")
             
             # Run stow
@@ -538,6 +547,7 @@ class DotfileManager:
                 return False
                 
             self.logger.debug(f"Stow stdout: {result.stdout}")
+            self.logger.info(f"Successfully stowed {item_path.name} to {target_dir}")
             return True
             
         except Exception as e:
@@ -722,29 +732,33 @@ class DotfileManager:
         ignore_rules: bool = False
     ) -> Dict[str, str]:
         """
-        Discovers dotfile directories recursively using DotfileAnalyzer.
+        Discovers dotfile directories recursively.
+        Prioritizes standard XDG and dotfile directories (.config, .local, etc).
         """
         self.logger.info(f"Discovering dotfiles in {local_dir}")
         dotfile_dirs = {}
 
-        # Build tree using DotfileAnalyzer
-        root_node = self.dotfile_analyzer.build_tree(local_dir)
-        
-        def traverse(node: DotfileNode) -> None:
-            if node.is_dotfile:
-                # Get the target path where this dotfile should be installed
-                if node.target_path:
-                    relative_path = node.path.relative_to(local_dir)
-                    dotfile_dirs[str(relative_path)] = node.config_type or "config"
-                    self.logger.debug(f"Found dotfile: {relative_path} of type {node.config_type}")
-            
-            for child in node.children:
-                traverse(child)
+        # Standard XDG and dotfile directories with their categories
+        standard_dirs = {
+            '.config': 'config',
+            '.local': 'local',
+            '.themes': 'themes',
+            '.icons': 'icons',
+            '.walls': 'wallpapers',
+            '.wallpapers': 'wallpapers',
+            '.fonts': 'fonts',
+            '.bin': 'bin',
+            '.scripts': 'scripts',
+        }
 
-        # Traverse the tree to find all dotfiles
-        traverse(root_node)
-        
-        # If no dotfiles were found through automatic detection, check repository config
+        # First, check for standard directories
+        for dir_name, category in standard_dirs.items():
+            dir_path = local_dir / dir_name
+            if dir_path.exists() and dir_path.is_dir():
+                dotfile_dirs[dir_name] = category
+                self.logger.info(f"Found standard dotfile directory: {dir_name} ({category})")
+
+        # If no standard directories found, try repository config
         if not dotfile_dirs and repo_config:
             config_dirs = repo_config.get_dotfile_directories()
             categories = repo_config.get_dotfile_categories()
@@ -764,32 +778,33 @@ class DotfileManager:
                     dotfile_dirs[str(path)] = category
                     self.logger.debug(f"Added custom path: {path} of type {category}")
 
+        # If still no dotfiles found, use DotfileAnalyzer as fallback
         if not dotfile_dirs:
-            # Look for common dotfile locations if nothing else was found
-            common_locations = [
-                ('.config', 'config'),
-                ('.local', 'local'),
-                ('.themes', 'themes'),
-                ('.icons', 'icons'),
-                ('.walls', 'wallpapers'),
-                ('wallpapers', 'wallpapers'),
-                ('themes', 'themes'),
-                ('icons', 'icons'),
-                ('fonts', 'fonts'),
-            ]
+            root_node = self.dotfile_analyzer.build_tree(local_dir)
             
-            for location, category in common_locations:
-                path = local_dir / location
-                if path.exists() and path.is_dir():
-                    dotfile_dirs[location] = category
-                    self.logger.debug(f"Found common dotfile location: {location} of type {category}")
+            def traverse(node: DotfileNode) -> None:
+                if node.is_dotfile:
+                    # Get the target path where this dotfile should be installed
+                    if node.target_path:
+                        relative_path = node.path.relative_to(local_dir)
+                        dotfile_dirs[str(relative_path)] = node.config_type or "config"
+                        self.logger.debug(f"Found dotfile: {relative_path} of type {node.config_type}")
+                
+                for child in node.children:
+                    traverse(child)
+
+            traverse(root_node)
 
         if not dotfile_dirs:
             self.logger.warning(
                 "No dotfiles found through automatic detection or configuration. "
-                "This might indicate that the repository structure is not recognized. "
-                "Consider creating a rice.json configuration file or using custom paths."
+                "Please ensure the repository contains dotfiles in standard locations "
+                "(e.g., .config/, .local/, etc.) or create a rice.json configuration file."
             )
+
+        # Log all discovered directories
+        for path, category in dotfile_dirs.items():
+            self.logger.info(f"Will apply dotfile: {path} as {category}")
 
         return dotfile_dirs
 
