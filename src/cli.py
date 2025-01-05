@@ -511,6 +511,7 @@ COMMANDS = {
             (("--overwrite-symlink",), {"help": "Overwrite existing symlinks", "action": "store_true"}),
             ("--template-context", {"help": "JSON string containing template context variables", "default": "{}"}),
             ("--discover-templates", {"action": "store_true", "help": "Automatically discover and process template files", "default": False}),
+            ("--custom-scripts", {"help": "Comma-separated list of custom scripts to run"}),
         ],
         "handler": handle_apply,
     },
