@@ -1,8 +1,8 @@
 # RiceAutomata: Intelligent Dotfile and System Configuration Manager
 
-[![Test Status](https://github.com/zgabrielr1/riceautomata/actions/workflows/test.yml/badge.svg)](https://github.com/zgabrielr1/riceautomata/actions/workflows/test.yml)
-
 RiceAutomata is a powerful and flexible command-line tool designed to automate the management and deployment of your dotfiles and system configurations (also known as "rices"). It simplifies the process of setting up and maintaining a consistent development environment across multiple machines.
+
+Note: This is a overly complex alternative to apply multiple rices, could've done just using git + stow, I know. also, like 99% of the code generated is mad by ai. primarily using Open-Ai O1 model and Claude 3.5 Sonnet(mainly 3.5 sonnet in Windsurf). also used Windsurf and Cursor (mainly Windsurf) as the code editor.
 
 ## Features
 
