@@ -195,9 +195,14 @@ class DotfileAnalyzer:
         if parent_type:
             return True, parent_type
             
+        # Check if it's a directory containing .config
+        if path.is_dir():
+            config_dir = path / '.config'
+            if config_dir.exists() and config_dir.is_dir():
+                return True, 'config'
+
         # Check if it's under .config or config
-        parent = path.parent.name.lower()
-        if parent in {'.config', 'config'}:
+        if '.config' in path.parts or any(part.lower() == 'config' for part in path.parts):
             return True, 'config'
             
         # Check if it's under .local

@@ -421,9 +421,74 @@ class DotfileManager:
                 return False
         return True
 
+    def _detect_required_packages(self, local_dir: Path, repo_config: RepositoryConfig) -> Dict[str, Set[str]]:
+        """
+        Detects required packages by analyzing the dotfile tree and configuration.
+        
+        Args:
+            local_dir (Path): Directory to analyze.
+            repo_config (RepositoryConfig): Repository configuration.
+            
+        Returns:
+            Dict[str, Set[str]]: Required packages categorized by package manager.
+        """
+        required_packages = {
+            'pacman': set(),
+            'aur': set(),
+            'apt': set(),
+            'pip': set(),
+            'cargo': set()
+        }
+        
+        # Build dotfile tree
+        root = self.dotfile_analyzer.build_tree(local_dir)
+        
+        # Find dependencies in the tree
+        self.dotfile_analyzer.find_dependencies(root)
+        
+        # Traverse tree and collect dependencies
+        def collect_deps(node: DotfileNode):
+            if node.dependencies:
+                for dep in node.dependencies:
+                    # Check dependency map for package manager
+                    for pm, pkgs in self.dependency_map.items():
+                        if dep in pkgs:
+                            required_packages[pm].add(dep)
+                            break
+                    else:
+                        # If not found in map, default to system package manager
+                        if self.package_manager.manager.name == 'pacman':
+                            required_packages['pacman'].add(dep)
+                        else:
+                            required_packages['apt'].add(dep)
+                            
+            for child in node.children:
+                collect_deps(child)
+        
+        collect_deps(root)
+        
+        # Add dependencies from repo config
+        if repo_config and repo_config.config:
+            for profile in repo_config.config.get('profiles', {}).values():
+                deps = profile.get('dependencies', [])
+                for dep in deps:
+                    # Check if dependency specifies package manager
+                    if ':' in dep:
+                        pm, pkg = dep.split(':', 1)
+                        if pm in required_packages:
+                            required_packages[pm].add(pkg)
+                    else:
+                        # Default to system package manager
+                        if self.package_manager.manager.name == 'pacman':
+                            required_packages['pacman'].add(dep)
+                        else:
+                            required_packages['apt'].add(dep)
+        
+        return required_packages
+
     def _handle_templates(self, local_dir: Path, template_context: Dict[str, Any]) -> bool:
         """
-        Processes template files if discover_templates is True.
+        Processes template files with improved context management and error handling.
 
         Args:
             local_dir (Path): Local repository directory.
@@ -434,44 +499,63 @@ class DotfileManager:
         """
         self.logger.info("Processing templates...")
         template_dir = local_dir / "templates"
-        target_template_dir = Path.home() / ".config"
-        if template_dir.exists():
-            if not self.template_handler.render_templates(template_dir, target_template_dir, template_context):
+        
+        if not template_dir.exists():
+            self.logger.warning(f"Template directory '{template_dir}' does not exist.")
+            return True
+            
+        # Enhance template context with system information
+        enhanced_context = {
+            **template_context,
+            'system': {
+                'hostname': os.uname().nodename,
+                'username': os.getlogin(),
+                'home': str(Path.home()),
+                'config_home': str(Path.home() / '.config'),
+                'local_home': str(Path.home() / '.local'),
+                'xdg_data_home': os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share')),
+                'xdg_config_home': os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')),
+                'xdg_cache_home': os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache')),
+            },
+            'paths': {
+                'templates': str(template_dir),
+                'config': str(Path.home() / '.config'),
+                'local': str(Path.home() / '.local'),
+                'home': str(Path.home()),
+            }
+        }
+        
+        try:
+            # Create a backup of existing templates
+            target_template_dir = Path.home() / ".config"
+            template_files = list(template_dir.rglob('*'))
+            
+            for template in template_files:
+                if template.is_file():
+                    rel_path = template.relative_to(template_dir)
+                    target_path = target_template_dir / rel_path.with_suffix('')
+                    
+                    if target_path.exists():
+                        backup_path = self._backup_existing_config(target_path)
+                        if backup_path:
+                            self.logger.info(f"Backed up existing template at {target_path} to {backup_path}")
+                            
+            # Render templates with enhanced context
+            if not self.template_handler.render_templates(
+                template_dir,
+                target_template_dir,
+                enhanced_context,
+                backup=False  # We already handled backups
+            ):
                 self.logger.error("Failed to process templates.")
                 return False
-        else:
-            self.logger.warning(f"Template directory '{template_dir}' does not exist.")
-        return True
-
-    def _run_custom_scripts(self, local_dir: Path, custom_scripts: List[str]) -> bool:
-        """
-        Executes custom scripts.
-
-        Args:
-            local_dir (Path): Local repository directory.
-            custom_scripts (List[str]): List of custom scripts to run.
-
-        Returns:
-            bool: True if successful, False otherwise.
-        """
-        if custom_scripts:
-            self.logger.info("Executing custom scripts...")
-            if not self.script_runner.run_scripts_by_phase(local_dir, 'custom_scripts', {'custom_scripts': custom_scripts}, env=None):
-                self.logger.error("Failed to execute custom scripts.")
-                return False
-        return True
-
-    def _update_rice_config(self, repository_name: str, rice_config: Dict[str, Any]) -> None:
-        """
-        Updates the rice configuration in the config manager.
-
-        Args:
-            repository_name (str): Name of the repository.
-            rice_config (Dict[str, Any]): Updated rice configuration.
-        """
-        rice_config['applied'] = True
-        self.config_manager.add_rice_config(repository_name, rice_config)
-        self.logger.info(f"Successfully applied all configurations from {repository_name}")
+                
+            self.logger.info("Successfully processed all templates")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error processing templates: {e}")
+            return False
 
     def _get_current_rice(self) -> Optional[str]:
         """
@@ -719,7 +803,7 @@ class DotfileManager:
 
     def _stow_item(self, local_dir: Path, item_path: Path, stow_options: List[str]) -> bool:
         """
-        Applies a single item using GNU Stow.
+        Applies a single item using GNU Stow with improved error handling and conflict resolution.
 
         Args:
             local_dir (Path): Base directory containing the dotfiles.
@@ -730,64 +814,60 @@ class DotfileManager:
             bool: True if successful, False otherwise.
         """
         try:
-            # Ensure paths are absolute
-            local_dir = local_dir.resolve()
-            item_path = (local_dir / item_path).resolve()
-
-            if not item_path.exists():
-                self.logger.error(f"Item path does not exist: {item_path}")
-                return False
-
-            # Standard XDG and dotfile directories with their target paths
-            standard_targets = self._get_standard_config_dirs()
-
-            # Determine target directory based on item path
-            target_dir = None
-            for dir_name, target in standard_targets.items():
-                if dir_name in item_path.parts:
-                    target_dir = target
-                    break
-
-            # Default to home directory if no specific target found
-            if not target_dir:
-                target_dir = Path.home()
-
-            # Create target directory if it doesn't exist
-            target_dir.mkdir(parents=True, exist_ok=True)
-
             # Prepare stow command
-            stow_cmd = ['stow']
-            stow_cmd.extend(stow_options)
-            stow_cmd.extend([
-                '--dir', str(local_dir),
-                '--target', str(target_dir),
-                '--verbose=3',  # Maximum verbosity for debugging
-                str(item_path.relative_to(local_dir))
-            ])
-
-            self.logger.info(f"Stowing {item_path.name} to {target_dir}")
-            self.logger.debug(f"Running stow command: {' '.join(stow_cmd)}")
-
-            # Run stow
-            result = subprocess.run(
-                stow_cmd,
-                capture_output=True,
-                text=True,
-                check=False  # Don't raise exception, we'll handle errors
-            )
-
-            if result.returncode != 0:
-                self.logger.error(f"Stow failed with return code {result.returncode}")
-                self.logger.error(f"Stow stderr: {result.stderr}")
-                return False
-
-            self.logger.debug(f"Stow stdout: {result.stdout}")
-            self.logger.info(f"Successfully stowed {item_path.name} to {target_dir}")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Error in _stow_item: {str(e)}")
+            cmd = ['stow', '--verbose=2', '--target', str(Path.home())]
+            cmd.extend(stow_options)
+            
+            # Add source directory
+            relative_path = item_path.relative_to(local_dir)
+            source_dir = local_dir / relative_path.parts[0]
+            cmd.append(str(relative_path.parts[0]))
+            
+            # Change to local directory
+            with self._change_dir(local_dir):
+                # First try a dry run to detect conflicts
+                dry_run_cmd = cmd + ['--simulate']
+                result = subprocess.run(dry_run_cmd, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    # Check for common issues
+                    if "existing target is" in result.stderr:
+                        self.logger.warning(f"Conflict detected for {item_path}")
+                        if '--adopt' not in stow_options:
+                            backup_path = self._backup_existing_config(Path.home() / item_path.name)
+                            if backup_path:
+                                self.logger.info(f"Backed up existing config to {backup_path}")
+                            else:
+                                return False
+                    else:
+                        self.logger.error(f"Stow dry-run failed: {result.stderr}")
+                        return False
+                
+                # Proceed with actual stow
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    self.logger.error(f"Stow failed: {result.stderr}")
+                    return False
+                
+                self.logger.info(f"Successfully stowed {item_path}")
+                return True
+                
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Stow command failed: {e}")
             return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error during stow: {e}")
+            return False
+
+    @contextmanager
+    def _change_dir(self, path: Path):
+        """Context manager for changing directory."""
+        prev_dir = Path.cwd()
+        os.chdir(path)
+        try:
+            yield
+        finally:
+            os.chdir(prev_dir)
 
     def _discover_dotfile_directories(
         self,
@@ -901,28 +981,6 @@ class DotfileManager:
             'bin': Path.home() / '.local/bin',
             'scripts': Path.home() / '.local/bin',
         }
-
-    def _handle_templates(self, local_dir: Path, template_context: Dict[str, Any]) -> bool:
-        """
-        Processes template files if discover_templates is True.
-
-        Args:
-            local_dir (Path): Local repository directory.
-            template_context (Dict[str, Any]): Context for template rendering.
-
-        Returns:
-            bool: True if successful, False otherwise.
-        """
-        self.logger.info("Processing templates...")
-        template_dir = local_dir / "templates"
-        target_template_dir = Path.home() / ".config"
-        if template_dir.exists():
-            if not self.template_handler.render_templates(template_dir, target_template_dir, template_context):
-                self.logger.error("Failed to process templates.")
-                return False
-        else:
-            self.logger.warning(f"Template directory '{template_dir}' does not exist.")
-        return True
 
     def _install_packages(self, packages: Dict[str, Set[str]]) -> bool:
         """
@@ -1253,4 +1311,3 @@ class DotfileManager:
     # Additional methods (e.g., _handle_templates, _run_custom_scripts, etc.) remain unchanged or are optimized above.
 
     # Implement other methods as needed, ensuring they follow similar improvements.
-
